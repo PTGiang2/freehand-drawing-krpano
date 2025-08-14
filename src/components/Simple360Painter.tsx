@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { View, TouchableOpacity, Text, StyleSheet, StatusBar } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { sendKrpano } from './drawing/KrpanoBridge';
-import { tapPoint, undoPoint, clearPoint, movePoint, startNewPointShape } from './drawing/PointMode';
+import { tapPoint, undoPoint, clearPoint, movePoint } from './drawing/PointMode';
 import { startFreehand, moveFreehand, undoFreehand, clearFreehand, moveAllFreehand } from './drawing/FreehandMode';
 
 const DOT_HTML = "<div style='width:18px;height:18px;background:#FF3B30;border-radius:9px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.45)'></div>";
@@ -20,10 +20,6 @@ export const Simple360Painter: React.FC = () => {
     const x = Math.round(e.nativeEvent.locationX);
     const y = Math.round(e.nativeEvent.locationY);
     tapPoint(webRef, x, y);
-  };
-
-  const onNewShape = () => {
-    startNewPointShape(webRef);
   };
 
   // Free hand drawing handlers
@@ -156,15 +152,6 @@ export const Simple360Painter: React.FC = () => {
         >
           <Text style={styles.toggleText}>{freeHandMode ? '🖌️ Đang vẽ tự do' : '🖌️ Vẽ tự do'}</Text>
         </TouchableOpacity>
-
-        {drawMode && (
-          <TouchableOpacity 
-            style={[styles.toggleBtn, { backgroundColor: '#34C759' }]}
-            onPress={onNewShape}
-          >
-            <Text style={styles.toggleText}>➕ Tạo hình mới</Text>
-          </TouchableOpacity>
-        )}
       </View>
 
       {(drawMode || freeHandMode) && (

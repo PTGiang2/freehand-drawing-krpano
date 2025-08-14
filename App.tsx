@@ -4,9 +4,15 @@
  */
 
 import React from 'react';
-import { View, StatusBar } from 'react-native';
+import { View, StatusBar, LogBox } from 'react-native';
 import { observer } from 'mobx-react-lite';
 import { Simple360Painter } from './src/components/Simple360Painter';
+
+// Suppress WKWebView injectedJavaScript return-type warnings that block touches in dev
+LogBox.ignoreLogs([
+  'Error evaluating injectedJavaScript',
+  'JavaScript execution returned a result of an unsupported type',
+]);
 
 const App = observer(() => {
   return (
