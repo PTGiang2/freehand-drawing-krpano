@@ -4,9 +4,9 @@
  */
 
 import React from 'react';
-import { View, StatusBar, LogBox } from 'react-native';
-import { observer } from 'mobx-react-lite';
-import { Simple360Painter } from './src/components/Simple360Painter';
+import {View, StatusBar, LogBox} from 'react-native';
+import {observer} from 'mobx-react-lite';
+import {Simple360Painter} from './src/components/Simple360Painter';
 
 // Suppress WKWebView injectedJavaScript return-type warnings that block touches in dev
 LogBox.ignoreLogs([
@@ -16,7 +16,7 @@ LogBox.ignoreLogs([
 
 const App = observer(() => {
   return (
-    <View style={{ flex: 1, backgroundColor: 'black' }}>
+    <View style={{flex: 1, backgroundColor: 'black'}}>
       <StatusBar hidden={true} />
       <Simple360Painter />
     </View>
