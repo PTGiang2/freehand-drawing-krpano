@@ -61,6 +61,14 @@ export const Simple360Painter: React.FC = () => {
   const [savedStrokes, setSavedStrokes] = useState<
     {name: string; points: SpherePoint[]}[]
   >([]);
+  // Lịch sử undo/redo để khôi phục các nét vẽ đã bị xóa
+  const [undoHistory, setUndoHistory] = useState<
+    {name: string; points: SpherePoint[]}[]
+  >([]);
+  // Lịch sử vị trí để khôi phục vị trí cũ khi redo
+  const [positionHistory, setPositionHistory] = useState<
+    {name: string; points: SpherePoint[]}[]
+  >([]);
   // Tên stroke đang được chọn (mặc định chọn stroke cuối cùng)
   const selectedStrokeRef = React.useRef<string | null>(null);
   // Chế độ xóa theo ý muốn (chọn 1 nét để xóa)
@@ -80,6 +88,10 @@ export const Simple360Painter: React.FC = () => {
     const y = Math.round(e.nativeEvent.locationY);
     // Gọi hàm tạo điểm mới với tọa độ đã lấy được
     tapPoint(webRef, x, y);
+    // Reset lịch sử undo khi có điểm mới (vì đã có thay đổi mới)
+    setUndoHistory([]);
+    // Reset lịch sử vị trí khi có điểm mới
+    setPositionHistory([]);
   };
 
   // Các hàm xử lý vẽ tự do
@@ -141,6 +153,16 @@ export const Simple360Painter: React.FC = () => {
     const x = Math.round(e.nativeEvent.locationX);
     const y = Math.round(e.nativeEvent.locationY);
     lastTouchRef.current = {x, y};
+    
+    // Lưu vị trí cũ của stroke đang được chọn để có thể redo
+    if (selectedStrokeRef.current) {
+      const currentStroke = savedStrokes.find(s => s.name === selectedStrokeRef.current);
+      if (currentStroke) {
+        console.log('Lưu vị trí cũ của stroke:', currentStroke.name);
+        setPositionHistory(prev => [...prev, {...currentStroke}]);
+      }
+    }
+    
     // Hit-test để chọn stroke dưới ngón tay
     const names = savedStrokes.map(s => s.name);
     if (names.length) {
@@ -205,6 +227,10 @@ export const Simple360Painter: React.FC = () => {
       const last = savedStrokes[savedStrokes.length - 1];
       removeStroke(webRef, last.name);
       const next = savedStrokes.slice(0, -1);
+      
+      // Lưu stroke bị xóa vào lịch sử undo để có thể redo
+      setUndoHistory(prev => [...prev, last]);
+      
       setSavedStrokes(next);
       await AsyncStorage.setItem(
         'freehand_strokes',
@@ -224,6 +250,10 @@ export const Simple360Painter: React.FC = () => {
           const last = parsed[parsed.length - 1];
           removeStroke(webRef, last.name);
           const next = parsed.slice(0, -1);
+          
+          // Lưu stroke bị xóa vào lịch sử undo để có thể redo
+          setUndoHistory(prev => [...prev, last]);
+          
           setSavedStrokes(next);
           await AsyncStorage.setItem(
             'freehand_strokes',
@@ -246,6 +276,75 @@ export const Simple360Painter: React.FC = () => {
     }
   };
 
+  // Hàm xử lý làm lại (redo) - khôi phục vị trí cũ khi di chuyển
+  const redo = async () => {
+    console.log('Redo được gọi');
+    console.log('Position history length:', positionHistory.length);
+    console.log('Undo history length:', undoHistory.length);
+    
+    // Nếu có lịch sử vị trí thì khôi phục vị trí cũ
+    if (positionHistory.length > 0) {
+      console.log('Khôi phục vị trí cũ');
+      // Lấy vị trí cũ cuối cùng
+      const lastPosition = positionHistory[positionHistory.length - 1];
+      const nextPositionHistory = positionHistory.slice(0, -1);
+      
+      // Khôi phục vị trí cũ của stroke
+      renderFreehandStroke(webRef, lastPosition.name, lastPosition.points);
+      
+      // Cập nhật stroke trong danh sách đã lưu
+      const nextStrokes = savedStrokes.map(s => 
+        s.name === lastPosition.name ? lastPosition : s
+      );
+      setSavedStrokes(nextStrokes);
+      
+      // Cập nhật lịch sử vị trí
+      setPositionHistory(nextPositionHistory);
+      
+      // Lưu vào AsyncStorage
+      await AsyncStorage.setItem(
+        'freehand_strokes',
+        JSON.stringify(nextStrokes),
+      ).catch(() => {});
+      
+      // Cập nhật stroke được chọn
+      selectedStrokeRef.current = lastPosition.name;
+      console.log('Đã khôi phục vị trí cũ của stroke:', lastPosition.name);
+      return;
+    }
+    
+    // Nếu không có lịch sử vị trí thì khôi phục stroke đã bị xóa (logic cũ)
+    if (undoHistory.length > 0) {
+      console.log('Khôi phục stroke đã bị xóa');
+      // Khôi phục tất cả stroke đã bị xóa
+      undoHistory.forEach(stroke => {
+        renderFreehandStroke(webRef, stroke.name, stroke.points);
+      });
+      
+      // Thêm tất cả stroke vào danh sách đã lưu
+      const nextStrokes = [...savedStrokes, ...undoHistory];
+      setSavedStrokes(nextStrokes);
+      
+      // Reset lịch sử undo
+      setUndoHistory([]);
+      
+      // Lưu vào AsyncStorage
+      await AsyncStorage.setItem(
+        'freehand_strokes',
+        JSON.stringify(nextStrokes),
+      ).catch(() => {});
+      
+      // Cập nhật stroke được chọn (stroke cuối cùng)
+      if (nextStrokes.length > 0) {
+        selectedStrokeRef.current = nextStrokes[nextStrokes.length - 1].name;
+      }
+      console.log('Đã khôi phục stroke đã bị xóa');
+      return;
+    }
+    
+    console.log('Không có gì để redo');
+  };
+
   // Hàm xử lý xóa (clear) - xóa tất cả nét vẽ hiện tại
   const clear = async () => {
     // Nếu đang ở chế độ xóa theo ý muốn và có nét được chọn => xóa nét đó
@@ -253,6 +352,13 @@ export const Simple360Painter: React.FC = () => {
       const target = selectedStrokeRef.current;
       removeStroke(webRef, target);
       const next = savedStrokes.filter(s => s.name !== target);
+      
+      // Lưu stroke bị xóa vào lịch sử undo để có thể redo
+      const deletedStroke = savedStrokes.find(s => s.name === target);
+      if (deletedStroke) {
+        setUndoHistory(prev => [...prev, deletedStroke]);
+      }
+      
       setSavedStrokes(next);
       await AsyncStorage.setItem(
         'freehand_strokes',
@@ -276,10 +382,17 @@ export const Simple360Painter: React.FC = () => {
       // noop
     }
     if (list && list.length) {
+      // Lưu tất cả stroke bị xóa vào lịch sử undo để có thể redo
+      // KHÔNG reset lịch sử undo ở đây để có thể redo
+      setUndoHistory(prev => [...prev, ...list]);
+      
       list.forEach(s => removeStroke(webRef, s.name));
     }
     setSavedStrokes([]);
     selectedStrokeRef.current = null;
+    // KHÔNG reset lịch sử undo khi xóa toàn bộ - để có thể redo
+    // Reset lịch sử vị trí khi xóa toàn bộ
+    setPositionHistory([]);
     await AsyncStorage.removeItem('freehand_strokes').catch(() => {});
   };
 
@@ -431,12 +544,24 @@ export const Simple360Painter: React.FC = () => {
                 ).catch(() => {});
                 return next;
               });
+              // Reset lịch sử undo khi có stroke mới (vì đã có thay đổi mới)
+              setUndoHistory([]);
+              // Reset lịch sử vị trí khi có stroke mới
+              setPositionHistory([]);
               pendingStrokeNameRef.current = null;
               return;
             }
             if (data && data.type === 'hit_stroke') {
               const name: string | null = data.name || null;
               if (name) {
+                // Lưu vị trí cũ của stroke trước khi chọn để có thể redo
+                if (selectedStrokeRef.current && selectedStrokeRef.current !== name) {
+                  const currentStroke = savedStrokes.find(s => s.name === selectedStrokeRef.current);
+                  if (currentStroke) {
+                    setPositionHistory(prev => [...prev, {...currentStroke}]);
+                  }
+                }
+                
                 if (
                   selectedStrokeRef.current &&
                   selectedStrokeRef.current !== name
@@ -467,6 +592,9 @@ export const Simple360Painter: React.FC = () => {
                 ).catch(() => {});
                 return next;
               });
+              // Reset lịch sử undo khi có stroke được cập nhật (vì đã có thay đổi mới)
+              setUndoHistory([]);
+              // KHÔNG reset lịch sử vị trí khi stroke được cập nhật - để có thể redo
               return;
             }
           } catch (_) {
@@ -579,6 +707,17 @@ export const Simple360Painter: React.FC = () => {
           <TouchableOpacity style={[styles.btn, styles.undo]} onPress={undo}>
             <Text style={styles.btnText}>↩️</Text>
           </TouchableOpacity>
+          {/* Button làm lại (redo) */}
+          <TouchableOpacity 
+            style={[
+              styles.btn, 
+              (positionHistory.length > 0 || undoHistory.length > 0) ? styles.redo : styles.redoDisabled
+            ]} 
+            onPress={redo}
+            disabled={positionHistory.length === 0 && undoHistory.length === 0}
+          >
+            <Text style={styles.btnText}>↪️</Text>
+          </TouchableOpacity>
           {/* Button xóa (clear) */}
           <TouchableOpacity style={[styles.btn, styles.clear]} onPress={clear}>
             <Text style={styles.btnText}>🗑️</Text>
@@ -673,4 +812,8 @@ const styles = StyleSheet.create({
   // Nút "Xóa theo ý": màu xám khi tắt, đỏ tươi khi bật để tương phản mạnh
   deleteOne: {backgroundColor: 'rgba(60,60,67,0.85)'},
   deleteOneOn: {backgroundColor: '#FF3B30'},
+  // Style cho button làm lại (redo) khi có lịch sử undo
+  redo: {backgroundColor: 'rgba(255,159,10,0.95)'}, // Cam trong suốt 95%
+  // Style cho button làm lại (redo) khi không có lịch sử undo
+  redoDisabled: {backgroundColor: 'rgba(60,60,67,0.85)'}, // Xám trong suốt 85%
 });
