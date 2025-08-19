@@ -7,9 +7,14 @@ import {
   Text, // Component hiển thị văn bản
   StyleSheet, // API để tạo styles cho component
   StatusBar, // Component để điều khiển thanh status bar của device
+  Share,
+  Modal,
+  TextInput,
+  Alert,
 } from 'react-native';
 // Import WebView để hiển thị nội dung web (krpano viewer) trong app
 import {WebView} from 'react-native-webview';
+import RNFS from 'react-native-fs';
 
 // Import các hàm xử lý vẽ điểm từ module PointMode
 import {
@@ -75,6 +80,56 @@ export const Simple360Painter: React.FC = () => {
   const [deleteOneMode, setDeleteOneMode] = useState<boolean>(false);
   // WebView đã sẵn sàng
   const [webReady, setWebReady] = useState<boolean>(false);
+  // Modal import strokes
+  const [importModalVisible, setImportModalVisible] = useState<boolean>(false);
+  const [importText, setImportText] = useState<string>('');
+
+  const exportStrokes = async () => {
+    try {
+      const payload = JSON.stringify(savedStrokes);
+      await Share.share({message: payload});
+    } catch (err) {
+      Alert.alert('Lỗi', 'Không thể xuất nét vẽ');
+    }
+  };
+
+  const saveStrokesToFile = async () => {
+    try {
+      const payload = JSON.stringify(savedStrokes);
+      const fileName = `strokes_${Date.now()}.json`;
+      const path = `${RNFS.DocumentDirectoryPath}/${fileName}`;
+      await RNFS.writeFile(path, payload, 'utf8');
+      await Share.share({url: 'file://' + path, message: `Đã lưu: ${fileName}`});
+    } catch (err) {
+      Alert.alert('Lỗi', 'Không thể lưu file');
+    }
+  };
+
+  const importStrokes = async () => {
+    try {
+      let parsed: {name: string; points: SpherePoint[]}[] = [];
+      parsed = JSON.parse(importText);
+      if (!Array.isArray(parsed)) {
+        throw new Error('invalid');
+      }
+      // Xóa toàn bộ hiện tại trên viewer
+      savedStrokes.forEach(s => removeStroke(webRef, s.name));
+      // Lưu và vẽ lại
+      setSavedStrokes(parsed);
+      await AsyncStorage.setItem('freehand_strokes', JSON.stringify(parsed)).catch(
+        () => {},
+      );
+      // Hydrate lên viewer nếu web sẵn sàng
+      if (webReady) {
+        parsed.forEach(s => renderFreehandStroke(webRef, s.name, s.points));
+      }
+      setImportModalVisible(false);
+      setUndoHistory([]);
+      setPositionHistory([]);
+    } catch (_) {
+      Alert.alert('Lỗi', 'Dữ liệu không hợp lệ');
+    }
+  };
 
   // Hàm xử lý sự kiện tap vào màn hình để tạo điểm
   const handleTap = (e: any) => {
@@ -698,6 +753,24 @@ export const Simple360Painter: React.FC = () => {
             {freeHandMode ? '🖌️ Đang vẽ tự do' : '🖌️ Vẽ tự do'}
           </Text>
         </TouchableOpacity>
+
+        {/* Export strokes */}
+        <TouchableOpacity style={styles.toggleBtn} onPress={exportStrokes}>
+          <Text style={styles.toggleText}>📤 Xuất</Text>
+        </TouchableOpacity>
+        {/* Save to file */}
+        <TouchableOpacity style={styles.toggleBtn} onPress={saveStrokesToFile}>
+          <Text style={styles.toggleText}>💾 Lưu file</Text>
+        </TouchableOpacity>
+        {/* Import strokes */}
+        <TouchableOpacity
+          style={styles.toggleBtn}
+          onPress={() => {
+            setImportText('');
+            setImportModalVisible(true);
+          }}>
+          <Text style={styles.toggleText}>📥 Nhập</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Container chứa các button điều khiển vẽ (hiển thị khi có chế độ thao tác) */}
@@ -741,6 +814,40 @@ export const Simple360Painter: React.FC = () => {
           </TouchableOpacity>
         </View>
       )}
+
+      {/* Modal nhập strokes */}
+      <Modal visible={importModalVisible} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Dán dữ liệu nét vẽ (JSON)</Text>
+            <View style={styles.modalBody}>
+              <TextInput
+                style={styles.modalInput}
+                multiline
+                scrollEnabled
+                autoCorrect={false}
+                autoCapitalize="none"
+                placeholder="Dán JSON..."
+                placeholderTextColor="#999"
+                value={importText}
+                onChangeText={setImportText}
+              />
+            </View>
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.modalCancel]}
+                onPress={() => setImportModalVisible(false)}>
+                <Text style={styles.modalBtnText}>Hủy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.modalOk]}
+                onPress={importStrokes}>
+                <Text style={styles.modalBtnText}>Nhập</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -812,8 +919,41 @@ const styles = StyleSheet.create({
   // Nút "Xóa theo ý": màu xám khi tắt, đỏ tươi khi bật để tương phản mạnh
   deleteOne: {backgroundColor: 'rgba(60,60,67,0.85)'},
   deleteOneOn: {backgroundColor: '#FF3B30'},
-  // Style cho button làm lại (redo) khi có lịch sử undo
-  redo: {backgroundColor: 'rgba(255,159,10,0.95)'}, // Cam trong suốt 95%
-  // Style cho button làm lại (redo) khi không có lịch sử undo
-  redoDisabled: {backgroundColor: 'rgba(60,60,67,0.85)'}, // Xám trong suốt 85%
+  // Style cho nút redo (bật/tắt)
+  redo: {backgroundColor: 'rgba(255,159,10,0.95)'},
+  redoDisabled: {backgroundColor: 'rgba(60,60,67,0.85)'},
+  // Modal styles
+  modalBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCard: {
+    width: '86%',
+    maxHeight: '80%',
+    backgroundColor: '#1c1c1e',
+    borderRadius: 12,
+    padding: 16,
+  },
+  modalTitle: {color: '#fff', fontWeight: '700', marginBottom: 8},
+  modalBody: {flexGrow: 1},
+  modalInput: {
+    minHeight: 160,
+    maxHeight: 420,
+    color: '#fff',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 8,
+    padding: 10,
+    textAlignVertical: 'top',
+  },
+  modalActions: {flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12},
+  modalBtn: {paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, marginLeft: 10},
+  modalCancel: {backgroundColor: 'rgba(60,60,67,0.85)'},
+  modalOk: {backgroundColor: '#0A84FF'},
+  modalBtnText: {color: '#fff', fontWeight: '700'},
 });
