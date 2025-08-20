@@ -42,7 +42,22 @@ import {
   removeStroke,
   moveStroke,
 } from './drawing/FreehandMode';
-import {postHotspotPoints, hitTestStrokes} from './drawing/KrpanoBridge';
+import {postHotspotPoints, postHotspotPointsDelayed, hitTestStrokes, postHotspotProps, hitTestCircles} from './drawing/KrpanoBridge';
+import {
+  startCircle,
+  resizeCircle,
+  finalizeCircle,
+  renderCircle,
+  removeCircle,
+  moveCircle,
+  setCircleSelected,
+  startStar,
+  resizeStar,
+  finalizeStar,
+  startArrow,
+  resizeArrow,
+  finalizeArrow,
+} from './drawing/UnifiedShapeHotspot';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Component chính Simple360Painter - ứng dụng vẽ 360 độ
@@ -53,6 +68,9 @@ export const Simple360Painter: React.FC = () => {
   const [freeHandMode, setFreeHandMode] = useState<boolean>(false);
   // State quản lý chế độ di chuyển (true = đang bật, false = đang tắt)
   const [moveMode, setMoveMode] = useState<boolean>(false);
+  // Chế độ vẽ hình tổng quát + loại hình
+  const [shapeMode, setShapeMode] = useState<boolean>(false);
+  const [shapeType, setShapeType] = useState<'circle' | 'star' | 'arrow'>('circle');
 
   // Ref tham chiếu đến WebView component để tương tác với krpano
   const webRef = React.useRef<WebView>(null);
@@ -66,6 +84,10 @@ export const Simple360Painter: React.FC = () => {
   const [savedStrokes, setSavedStrokes] = useState<
     {name: string; points: SpherePoint[]}[]
   >([]);
+  // Danh sách circle đã lưu
+  const [savedCircles, setSavedCircles] = useState<
+    {name: string; ath: number; atv: number; diameter: number}[]
+  >([]);
   // Lịch sử undo/redo để khôi phục các nét vẽ đã bị xóa
   const [undoHistory, setUndoHistory] = useState<
     {name: string; points: SpherePoint[]}[]
@@ -74,8 +96,13 @@ export const Simple360Painter: React.FC = () => {
   const [positionHistory, setPositionHistory] = useState<
     {name: string; points: SpherePoint[]}[]
   >([]);
+  // Lịch sử vị trí của circles
+  const [circlePositionHistory, setCirclePositionHistory] = useState<
+    {name: string; ath: number; atv: number; diameter: number}[]
+  >([]);
   // Tên stroke đang được chọn (mặc định chọn stroke cuối cùng)
   const selectedStrokeRef = React.useRef<string | null>(null);
+  const selectedCircleRef = React.useRef<string | null>(null);
   // Chế độ xóa theo ý muốn (chọn 1 nét để xóa)
   const [deleteOneMode, setDeleteOneMode] = useState<boolean>(false);
   // WebView đã sẵn sàng
@@ -83,6 +110,30 @@ export const Simple360Painter: React.FC = () => {
   // Modal import strokes
   const [importModalVisible, setImportModalVisible] = useState<boolean>(false);
   const [importText, setImportText] = useState<string>('');
+  // Circle drawing refs
+  const isDrawingCircleRef = React.useRef<boolean>(false);
+  const circleStartRef = React.useRef<{x: number; y: number} | null>(null);
+  const circleCounterRef = React.useRef<number>(0);
+  const pendingCircleNameRef = React.useRef<string | null>(null);
+  // Star drawing refs
+  const isDrawingStarRef = React.useRef<boolean>(false);
+  const starStartRef = React.useRef<{x: number; y: number} | null>(null);
+  const starCounterRef = React.useRef<number>(0);
+  const pendingStarNameRef = React.useRef<string | null>(null);
+  // Arrow drawing refs
+  const isDrawingArrowRef = React.useRef<boolean>(false);
+  const arrowStartRef = React.useRef<{x: number; y: number} | null>(null);
+  const arrowCounterRef = React.useRef<number>(0);
+  const pendingArrowNameRef = React.useRef<string | null>(null);
+  // Shape unified refs
+  const isDrawingShapeRef = React.useRef<boolean>(false);
+  const shapeStartRef = React.useRef<{x: number; y: number} | null>(null);
+  const shapeCounterRef = React.useRef<number>(0);
+  const pendingShapeNameRef = React.useRef<string | null>(null);
+  // Lịch sử undo cho circles
+  const [circleUndoHistory, setCircleUndoHistory] = useState<
+    {name: string; ath: number; atv: number; diameter: number}[]
+  >([]);
 
   const exportStrokes = async () => {
     try {
@@ -192,7 +243,127 @@ export const Simple360Painter: React.FC = () => {
     const name = `freehand_${Date.now()}_${num}`;
     pendingStrokeNameRef.current = name;
     finalizeFreehand(webRef, name);
-    postHotspotPoints(webRef, name, 'freehand_points');
+    // Dùng delay nhỏ để chắc chắn hotspot đã được tạo xong
+    postHotspotPointsDelayed(webRef, name, 'freehand_points', 60);
+  };
+
+  // Vẽ hình tròn: start/move/end
+  const handleCircleStart = (e: any) => {
+    if (!shapeMode || shapeType !== 'circle') {
+      return;
+    }
+    isDrawingCircleRef.current = true;
+    const x = Math.round(e.nativeEvent.locationX);
+    const y = Math.round(e.nativeEvent.locationY);
+    circleStartRef.current = {x, y};
+    startCircle(webRef, x, y);
+  };
+
+  const handleCircleMove = (e: any) => {
+    if (!shapeMode || shapeType !== 'circle' || !isDrawingCircleRef.current || !circleStartRef.current) {
+      return;
+    }
+    const x = Math.round(e.nativeEvent.locationX);
+    const y = Math.round(e.nativeEvent.locationY);
+    const dx = x - circleStartRef.current.x;
+    const dy = y - circleStartRef.current.y;
+    const diameter = Math.max(2, Math.round(Math.sqrt(dx * dx + dy * dy) * 2));
+    resizeCircle(webRef, diameter);
+  };
+
+  const handleCircleEnd = () => {
+    if (!shapeMode || shapeType !== 'circle' || !isDrawingCircleRef.current) {
+      return;
+    }
+    isDrawingCircleRef.current = false;
+    const num = ++circleCounterRef.current;
+    const name = `circle_${Date.now()}_${num}`;
+    pendingCircleNameRef.current = name;
+    finalizeCircle(webRef, name);
+    // Convert the finalized circle hotspot into lon/lat polyline points and save like a stroke
+    postHotspotPointsDelayed(webRef, name, 'freehand_points', 60);
+    circleStartRef.current = null;
+    // Thoát chế độ vẽ để có thể xoay 360 ngay sau khi thả
+    setShapeMode(false);
+  };
+
+  // Vẽ ngôi sao: start/move/end
+  const handleStarStart = (e: any) => {
+    if (!shapeMode || shapeType !== 'star') {
+      return;
+    }
+    isDrawingStarRef.current = true;
+    const x = Math.round(e.nativeEvent.locationX);
+    const y = Math.round(e.nativeEvent.locationY);
+    starStartRef.current = {x, y};
+    startStar(webRef, x, y);
+  };
+
+  const handleStarMove = (e: any) => {
+    if (!shapeMode || shapeType !== 'star' || !isDrawingStarRef.current || !starStartRef.current) {
+      return;
+    }
+    const x = Math.round(e.nativeEvent.locationX);
+    const y = Math.round(e.nativeEvent.locationY);
+    const dx = x - starStartRef.current.x;
+    const dy = y - starStartRef.current.y;
+    const diameter = Math.max(8, Math.round(Math.sqrt(dx * dx + dy * dy) * 2));
+    resizeStar(webRef, diameter);
+  };
+
+  const handleStarEnd = () => {
+    if (!shapeMode || shapeType !== 'star' || !isDrawingStarRef.current) {
+      return;
+    }
+    isDrawingStarRef.current = false;
+    const num = ++starCounterRef.current;
+    const name = `star_${Date.now()}_${num}`;
+    pendingStarNameRef.current = name;
+    finalizeStar(webRef, name);
+    // Lưu như stroke bằng cách yêu cầu danh sách điểm (thêm delay tránh race)
+    postHotspotPointsDelayed(webRef, name, 'freehand_points', 60);
+    starStartRef.current = null;
+    // Thoát chế độ vẽ để có thể xoay 360 ngay sau khi thả
+    setShapeMode(false);
+  };
+
+  // Vẽ mũi tên: start/move/end
+  const handleArrowStart = (e: any) => {
+    if (!shapeMode || shapeType !== 'arrow') {
+      return;
+    }
+    isDrawingArrowRef.current = true;
+    const x = Math.round(e.nativeEvent.locationX);
+    const y = Math.round(e.nativeEvent.locationY);
+    arrowStartRef.current = {x, y};
+    startArrow(webRef, x, y);
+  };
+
+  const handleArrowMove = (e: any) => {
+    if (!shapeMode || shapeType !== 'arrow' || !isDrawingArrowRef.current || !arrowStartRef.current) {
+      return;
+    }
+    const x = Math.round(e.nativeEvent.locationX);
+    const y = Math.round(e.nativeEvent.locationY);
+    const dx = x - arrowStartRef.current.x;
+    const dy = y - arrowStartRef.current.y;
+    const diameter = Math.max(8, Math.round(Math.sqrt(dx * dx + dy * dy) * 2));
+    resizeArrow(webRef, diameter);
+  };
+
+  const handleArrowEnd = () => {
+    if (!shapeMode || shapeType !== 'arrow' || !isDrawingArrowRef.current) {
+      return;
+    }
+    isDrawingArrowRef.current = false;
+    const num = ++arrowCounterRef.current;
+    const name = `arrow_${Date.now()}_${num}`;
+    pendingArrowNameRef.current = name;
+    finalizeArrow(webRef, name);
+    postHotspotPointsDelayed(webRef, name, 'freehand_points', 60);
+    arrowStartRef.current = null;
+    // Thoát chế độ vẽ để có thể xoay 360 ngay sau khi thả
+    setShapeMode(false);
   };
 
   // Các hàm xử lý chế độ di chuyển (pan gesture)
@@ -218,10 +389,23 @@ export const Simple360Painter: React.FC = () => {
       }
     }
     
+    // Lưu vị trí cũ của circle đang được chọn để có thể redo
+    if (selectedCircleRef.current) {
+      const currentCircle = savedCircles.find(c => c.name === selectedCircleRef.current);
+      if (currentCircle) {
+        setCirclePositionHistory(prev => [...prev, {...currentCircle}]);
+      }
+    }
+    
     // Hit-test để chọn stroke dưới ngón tay
     const names = savedStrokes.map(s => s.name);
     if (names.length) {
       hitTestStrokes(webRef, names, x, y, 50, 'hit_stroke');
+    }
+    // Hit-test circle
+    const cnames = savedCircles.map(c => c.name);
+    if (cnames.length) {
+      hitTestCircles(webRef, cnames, x, y, 50, 'hit_circle');
     }
   };
 
@@ -259,6 +443,11 @@ export const Simple360Painter: React.FC = () => {
           moveStroke(webRef, target, prev.x, prev.y, cur.x, cur.y);
         }
       }
+      // Di chuyển circle nếu có
+      if (selectedCircleRef.current) {
+        const cname = selectedCircleRef.current;
+        moveCircle(webRef, cname, prev.x, prev.y, cur.x, cur.y);
+      }
     }
     // Cập nhật vị trí cuối cùng để sử dụng cho lần di chuyển tiếp theo
     lastTouchRef.current = cur;
@@ -268,9 +457,15 @@ export const Simple360Painter: React.FC = () => {
   const onMoveEnd = () => {
     // Reset vị trí touch cuối cùng về null
     // Nếu đang di chuyển một stroke, sau khi thả tay thì lưu lại điểm mới vào state + local
-    if (moveMode && selectedStrokeRef.current) {
-      const name = selectedStrokeRef.current;
-      postHotspotPoints(webRef, name, 'stroke_points_update');
+    if (moveMode) {
+      if (selectedStrokeRef.current) {
+        const name = selectedStrokeRef.current;
+        postHotspotPoints(webRef, name, 'stroke_points_update');
+      }
+      if (selectedCircleRef.current) {
+        const cname = selectedCircleRef.current;
+        postHotspotProps(webRef, cname, 'circle_update');
+      }
     }
     lastTouchRef.current = null;
   };
@@ -294,6 +489,17 @@ export const Simple360Painter: React.FC = () => {
       selectedStrokeRef.current = next.length
         ? next[next.length - 1].name
         : null;
+      return;
+    }
+    // Undo circle nếu có circle đã lưu
+    if (savedCircles.length > 0) {
+      const last = savedCircles[savedCircles.length - 1];
+      removeCircle(webRef, last.name);
+      const next = savedCircles.slice(0, -1);
+      setCircleUndoHistory(prev => [...prev, last]);
+      setSavedCircles(next);
+      await AsyncStorage.setItem('circles', JSON.stringify(next)).catch(() => {});
+      selectedCircleRef.current = next.length ? next[next.length - 1].name : null;
       return;
     }
     // Nếu state chưa có, thử lấy từ AsyncStorage để đảm bảo reset xong vẫn undo được
@@ -368,6 +574,19 @@ export const Simple360Painter: React.FC = () => {
       return;
     }
     
+    // Nếu không có lịch sử vị trí stroke: khôi phục vị trí circle
+    if (circlePositionHistory.length > 0) {
+      const last = circlePositionHistory[circlePositionHistory.length - 1];
+      const nextPos = circlePositionHistory.slice(0, -1);
+      renderCircle(webRef, last.name, last.ath, last.atv, last.diameter);
+      const nextCircles = savedCircles.map(c => (c.name === last.name ? last : c));
+      setSavedCircles(nextCircles);
+      setCirclePositionHistory(nextPos);
+      await AsyncStorage.setItem('circles', JSON.stringify(nextCircles)).catch(() => {});
+      selectedCircleRef.current = last.name;
+      return;
+    }
+
     // Nếu không có lịch sử vị trí thì khôi phục stroke đã bị xóa (logic cũ)
     if (undoHistory.length > 0) {
       console.log('Khôi phục stroke đã bị xóa');
@@ -396,6 +615,20 @@ export const Simple360Painter: React.FC = () => {
       console.log('Đã khôi phục stroke đã bị xóa');
       return;
     }
+    // Khôi phục circle đã bị xóa
+    if (circleUndoHistory.length > 0) {
+      circleUndoHistory.forEach(c => {
+        renderCircle(webRef, c.name, c.ath, c.atv, c.diameter);
+      });
+      const nextCircles = [...savedCircles, ...circleUndoHistory];
+      setSavedCircles(nextCircles);
+      setCircleUndoHistory([]);
+      await AsyncStorage.setItem('circles', JSON.stringify(nextCircles)).catch(() => {});
+      if (nextCircles.length > 0) {
+        selectedCircleRef.current = nextCircles[nextCircles.length - 1].name;
+      }
+      return;
+    }
     
     console.log('Không có gì để redo');
   };
@@ -403,24 +636,33 @@ export const Simple360Painter: React.FC = () => {
   // Hàm xử lý xóa (clear) - xóa tất cả nét vẽ hiện tại
   const clear = async () => {
     // Nếu đang ở chế độ xóa theo ý muốn và có nét được chọn => xóa nét đó
-    if (deleteOneMode && selectedStrokeRef.current) {
-      const target = selectedStrokeRef.current;
-      removeStroke(webRef, target);
-      const next = savedStrokes.filter(s => s.name !== target);
-      
-      // Lưu stroke bị xóa vào lịch sử undo để có thể redo
-      const deletedStroke = savedStrokes.find(s => s.name === target);
-      if (deletedStroke) {
-        setUndoHistory(prev => [...prev, deletedStroke]);
+    if (deleteOneMode) {
+      if (selectedStrokeRef.current) {
+        const target = selectedStrokeRef.current;
+        removeStroke(webRef, target);
+        const next = savedStrokes.filter(s => s.name !== target);
+        const deletedStroke = savedStrokes.find(s => s.name === target);
+        if (deletedStroke) {
+          setUndoHistory(prev => [...prev, deletedStroke]);
+        }
+        setSavedStrokes(next);
+        await AsyncStorage.setItem('freehand_strokes', JSON.stringify(next)).catch(() => {});
+        selectedStrokeRef.current = null;
+        return;
       }
-      
-      setSavedStrokes(next);
-      await AsyncStorage.setItem(
-        'freehand_strokes',
-        JSON.stringify(next),
-      ).catch(() => {});
-      selectedStrokeRef.current = null;
-      return;
+      if (selectedCircleRef.current) {
+        const target = selectedCircleRef.current;
+        removeCircle(webRef, target);
+        const nextC = savedCircles.filter(c => c.name !== target);
+        const deletedCircle = savedCircles.find(c => c.name === target);
+        if (deletedCircle) {
+          setCircleUndoHistory(prev => [...prev, deletedCircle]);
+        }
+        setSavedCircles(nextC);
+        await AsyncStorage.setItem('circles', JSON.stringify(nextC)).catch(() => {});
+        selectedCircleRef.current = null;
+        return;
+      }
     }
     // Còn lại: Xóa toàn bộ (giữ logic cũ)
     clearPoint(webRef);
@@ -445,10 +687,13 @@ export const Simple360Painter: React.FC = () => {
     }
     setSavedStrokes([]);
     selectedStrokeRef.current = null;
+    setSavedCircles([]);
+    selectedCircleRef.current = null;
     // KHÔNG reset lịch sử undo khi xóa toàn bộ - để có thể redo
     // Reset lịch sử vị trí khi xóa toàn bộ
     setPositionHistory([]);
     await AsyncStorage.removeItem('freehand_strokes').catch(() => {});
+    await AsyncStorage.removeItem('circles').catch(() => {});
   };
 
   // Hàm chuyển đổi chế độ vẽ điểm (toggle)
@@ -469,6 +714,8 @@ export const Simple360Painter: React.FC = () => {
     setDrawMode(false);
     // Tắt chế độ di chuyển khi bật chế độ vẽ tự do
     setMoveMode(false);
+    // Tắt chế độ vẽ hình
+    setShapeMode(false);
   };
 
   // Hàm chuyển đổi chế độ di chuyển (toggle)
@@ -480,17 +727,28 @@ export const Simple360Painter: React.FC = () => {
       // Tắt các chế độ vẽ khi bật di chuyển
       setDrawMode(false);
       setFreeHandMode(false);
+      setShapeMode(false);
       // Tự động chọn stroke cuối cùng
       if (savedStrokes.length) {
         const last = savedStrokes[savedStrokes.length - 1].name;
         selectedStrokeRef.current = last;
         setStrokeSelected(webRef, last, true);
       }
+      // Tự động chọn circle cuối cùng
+      if (savedCircles.length) {
+        const lastC = savedCircles[savedCircles.length - 1].name;
+        selectedCircleRef.current = lastC;
+        setCircleSelected(webRef, lastC, true);
+      }
     } else {
       // Tắt highlight khi tắt di chuyển
       if (selectedStrokeRef.current) {
         setStrokeSelected(webRef, selectedStrokeRef.current, false);
         selectedStrokeRef.current = null;
+      }
+      if (selectedCircleRef.current) {
+        setCircleSelected(webRef, selectedCircleRef.current, false);
+        selectedCircleRef.current = null;
       }
     }
   };
@@ -503,6 +761,18 @@ export const Simple360Painter: React.FC = () => {
       setStrokeSelected(webRef, selectedStrokeRef.current, false);
       selectedStrokeRef.current = null;
     }
+    if (!next && selectedCircleRef.current) {
+      setCircleSelected(webRef, selectedCircleRef.current, false);
+      selectedCircleRef.current = null;
+    }
+  };
+
+  // Toggle unified shape mode
+  const toggleShapeMode = () => {
+    setShapeMode(v => !v);
+    setDrawMode(false);
+    setFreeHandMode(false);
+    setMoveMode(false);
   };
 
   // Hook useEffect để đồng bộ trạng thái được chọn giữa các chế độ vẽ
@@ -538,6 +808,11 @@ export const Simple360Painter: React.FC = () => {
             JSON.parse(raw);
           setSavedStrokes(parsed);
         }
+        const rawCir = await AsyncStorage.getItem('circles');
+        if (!cancelled && rawCir) {
+          const parsedCir: {name: string; ath: number; atv: number; diameter: number}[] = JSON.parse(rawCir);
+          setSavedCircles(parsedCir);
+        }
       } catch (_) {
         // noop
       }
@@ -555,7 +830,19 @@ export const Simple360Painter: React.FC = () => {
     savedStrokes.forEach(s => {
       renderFreehandStroke(webRef, s.name, s.points);
     });
+    savedCircles.forEach(c => {
+      renderCircle(webRef, c.name, c.ath, c.atv, c.diameter);
+    });
   }, [webReady, savedStrokes]);
+
+  React.useEffect(() => {
+    if (!webReady) {
+      return;
+    }
+    savedCircles.forEach(c => {
+      renderCircle(webRef, c.name, c.ath, c.atv, c.diameter);
+    });
+  }, [webReady, savedCircles]);
 
   // Render UI của component
   return (
@@ -606,6 +893,24 @@ export const Simple360Painter: React.FC = () => {
               pendingStrokeNameRef.current = null;
               return;
             }
+            if (
+              data &&
+              data.type === 'circle_props' &&
+              typeof data.ath === 'number' &&
+              typeof data.atv === 'number'
+            ) {
+              const cname: string =
+                data.name || pendingCircleNameRef.current || `circle_${Date.now()}`;
+              const diameter: number = typeof data.width === 'number' ? Number(data.width) : 20;
+              const meta = {name: cname, ath: Number(data.ath), atv: Number(data.atv), diameter};
+              setSavedCircles(prev => {
+                const next = [...prev, meta];
+                AsyncStorage.setItem('circles', JSON.stringify(next)).catch(() => {});
+                return next;
+              });
+              pendingCircleNameRef.current = null;
+              return;
+            }
             if (data && data.type === 'hit_stroke') {
               const name: string | null = data.name || null;
               if (name) {
@@ -626,6 +931,35 @@ export const Simple360Painter: React.FC = () => {
                 selectedStrokeRef.current = name;
                 setStrokeSelected(webRef, name, true);
               }
+              return;
+            }
+            if (data && data.type === 'hit_circle') {
+              const name: string | null = data.name || null;
+              if (name) {
+                if (selectedCircleRef.current && selectedCircleRef.current !== name) {
+                  setCircleSelected(webRef, selectedCircleRef.current, false);
+                }
+                selectedCircleRef.current = name;
+                setCircleSelected(webRef, name, true);
+              }
+              return;
+            }
+            if (
+              data &&
+              data.type === 'circle_update' &&
+              data.name &&
+              typeof data.ath === 'number' &&
+              typeof data.atv === 'number'
+            ) {
+              const updatedName: string = data.name;
+              const diameter: number = typeof data.width === 'number' ? Number(data.width) : 20;
+              setSavedCircles(prev => {
+                const next = prev.map(c =>
+                  c.name === updatedName ? {...c, ath: Number(data.ath), atv: Number(data.atv), diameter} : c,
+                );
+                AsyncStorage.setItem('circles', JSON.stringify(next)).catch(() => {});
+                return next;
+              });
               return;
             }
             if (
@@ -657,7 +991,7 @@ export const Simple360Painter: React.FC = () => {
           }
         }}
         // Điều khiển sự kiện touch: 'none' khi đang vẽ/di chuyển, 'auto' khi không
-        pointerEvents={drawMode || freeHandMode || moveMode ? 'none' : 'auto'}
+        pointerEvents={drawMode || freeHandMode || shapeMode || moveMode ? 'none' : 'auto'}
       />
 
       {/* Overlay để bắt sự kiện tap khi ở chế độ vẽ điểm và không di chuyển */}
@@ -689,6 +1023,21 @@ export const Simple360Painter: React.FC = () => {
           onResponderRelease={handleFreeHandEnd}
           // Xử lý khi bị gián đoạn vẽ tự do
           onResponderTerminate={handleFreeHandEnd}
+        />
+      )}
+
+
+
+      {/* Overlay unified shape (tròn/sao) */}
+      {shapeMode && !moveMode && (
+        <View
+          style={styles.overlay}
+          onStartShouldSetResponder={() => true}
+          onMoveShouldSetResponder={() => true}
+          onResponderGrant={(e)=>{shapeType==='circle'?handleCircleStart(e):(shapeType==='star'?handleStarStart(e):handleArrowStart(e));}}
+          onResponderMove={(e)=>{shapeType==='circle'?handleCircleMove(e):(shapeType==='star'?handleStarMove(e):handleArrowMove(e));}}
+          onResponderRelease={()=>{shapeType==='circle'?handleCircleEnd():(shapeType==='star'?handleStarEnd():handleArrowEnd());}}
+          onResponderTerminate={()=>{shapeType==='circle'?handleCircleEnd():(shapeType==='star'?handleStarEnd():handleArrowEnd());}}
         />
       )}
 
@@ -724,6 +1073,10 @@ export const Simple360Painter: React.FC = () => {
             if (names.length) {
               hitTestStrokes(webRef, names, x, y, 50, 'hit_stroke');
             }
+            const cnames = savedCircles.map(c => c.name);
+            if (cnames.length) {
+              hitTestCircles(webRef, cnames, x, y, 50, 'hit_circle');
+            }
           }}
         />
       )}
@@ -754,6 +1107,34 @@ export const Simple360Painter: React.FC = () => {
           </Text>
         </TouchableOpacity>
 
+        {/* Button toggle chế độ vẽ hình (gộp) */}
+        <TouchableOpacity
+          style={[styles.toggleBtn, shapeMode && styles.toggleOnCircle]}
+          onPress={toggleShapeMode}>
+          <Text style={styles.toggleText}>{shapeMode ? '🔷 Đang vẽ hình' : '🔷 Vẽ hình'}</Text>
+        </TouchableOpacity>
+
+        {/* Selector loại hình khi bật vẽ hình */}
+        {shapeMode && (
+          <View style={{gap: 8}}>
+            <TouchableOpacity
+              style={[styles.toggleBtn, shapeType === 'circle' && styles.toggleOnCircle]}
+              onPress={() => setShapeType('circle')}>
+              <Text style={styles.toggleText}>⭕ Tròn</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.toggleBtn, shapeType === 'star' && styles.toggleOnCircle]}
+              onPress={() => setShapeType('star')}>
+              <Text style={styles.toggleText}>⭐ Sao</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.toggleBtn, shapeType === 'arrow' && styles.toggleOnCircle]}
+              onPress={() => setShapeType('arrow')}>
+              <Text style={styles.toggleText}>➡️ Mũi tên</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Export strokes */}
         <TouchableOpacity style={styles.toggleBtn} onPress={exportStrokes}>
           <Text style={styles.toggleText}>📤 Xuất</Text>
@@ -774,7 +1155,7 @@ export const Simple360Painter: React.FC = () => {
       </View>
 
       {/* Container chứa các button điều khiển vẽ (hiển thị khi có chế độ thao tác) */}
-      {(drawMode || freeHandMode || moveMode) && (
+      {(drawMode || freeHandMode || shapeMode || moveMode) && (
         <View style={styles.controlsVert} pointerEvents="box-none">
           {/* Button hoàn tác (undo) */}
           <TouchableOpacity style={[styles.btn, styles.undo]} onPress={undo}>
@@ -784,10 +1165,10 @@ export const Simple360Painter: React.FC = () => {
           <TouchableOpacity 
             style={[
               styles.btn, 
-              (positionHistory.length > 0 || undoHistory.length > 0) ? styles.redo : styles.redoDisabled
+              (positionHistory.length > 0 || undoHistory.length > 0 || circlePositionHistory.length > 0 || circleUndoHistory.length > 0) ? styles.redo : styles.redoDisabled
             ]} 
             onPress={redo}
-            disabled={positionHistory.length === 0 && undoHistory.length === 0}
+            disabled={positionHistory.length === 0 && undoHistory.length === 0 && circlePositionHistory.length === 0 && circleUndoHistory.length === 0}
           >
             <Text style={styles.btnText}>↪️</Text>
           </TouchableOpacity>
@@ -886,6 +1267,7 @@ const styles = StyleSheet.create({
   // Style khi button toggle đang được bật (active state)
   toggleOnDraw: {backgroundColor: '#FF9F0A'}, // Cam đậm khi bật "Vẽ"
   toggleOnFreehand: {backgroundColor: '#0A84FF'}, // Xanh dương khi bật "Vẽ tự do"
+  toggleOnCircle: {backgroundColor: '#32D74B'},
   // Style cho text trong button toggle
   toggleText: {color: '#fff', fontWeight: '700', fontSize: 12}, // Chữ trắng, đậm, size 12
   // Style cho container button điều khiển vẽ ở bên trái màn hình
