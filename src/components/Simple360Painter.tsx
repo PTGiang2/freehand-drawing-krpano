@@ -41,8 +41,15 @@ import {
   setStrokeSelected,
   removeStroke,
   moveStroke,
+  scaleStroke,
 } from './drawing/FreehandMode';
-import {postHotspotPoints, postHotspotPointsDelayed, hitTestStrokes, postHotspotProps, hitTestCircles} from './drawing/KrpanoBridge';
+import {
+  postHotspotPoints,
+  postHotspotPointsDelayed,
+  hitTestStrokes,
+  postHotspotProps,
+  hitTestCircles,
+} from './drawing/KrpanoBridge';
 import {
   startCircle,
   resizeCircle,
@@ -57,6 +64,12 @@ import {
   startArrow,
   resizeArrow,
   finalizeArrow,
+  startHeart,
+  resizeHeart,
+  finalizeHeart,
+  startDiamond,
+  resizeDiamond,
+  finalizeDiamond,
 } from './drawing/UnifiedShapeHotspot';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -68,9 +81,19 @@ export const Simple360Painter: React.FC = () => {
   const [freeHandMode, setFreeHandMode] = useState<boolean>(false);
   // State quản lý chế độ di chuyển (true = đang bật, false = đang tắt)
   const [moveMode, setMoveMode] = useState<boolean>(false);
+  // State quản lý chế độ phóng to/thu nhỏ (true = đang bật, false = đang tắt)
+  const [scaleMode, setScaleMode] = useState<boolean>(false);
   // Chế độ vẽ hình tổng quát + loại hình
   const [shapeMode, setShapeMode] = useState<boolean>(false);
-  const [shapeType, setShapeType] = useState<'circle' | 'star' | 'arrow'>('circle');
+  const [shapeType, setShapeType] = useState<
+    'circle' | 'star' | 'arrow' | 'heart' | 'diamond'
+  >('circle');
+
+  // Giới hạn kích thước và scale
+  const MIN_CIRCLE_DIAMETER = 20; // px
+  const MAX_CIRCLE_DIAMETER = 900; // px
+  const MIN_SCALE_FACTOR = 0.3; // 30% kích thước ban đầu
+  const MAX_SCALE_FACTOR = 4.0; // 400% kích thước ban đầu
 
   // Ref tham chiếu đến WebView component để tương tác với krpano
   const webRef = React.useRef<WebView>(null);
@@ -125,15 +148,49 @@ export const Simple360Painter: React.FC = () => {
   const arrowStartRef = React.useRef<{x: number; y: number} | null>(null);
   const arrowCounterRef = React.useRef<number>(0);
   const pendingArrowNameRef = React.useRef<string | null>(null);
-  // Shape unified refs
-  const isDrawingShapeRef = React.useRef<boolean>(false);
-  const shapeStartRef = React.useRef<{x: number; y: number} | null>(null);
-  const shapeCounterRef = React.useRef<number>(0);
-  const pendingShapeNameRef = React.useRef<string | null>(null);
+  // Heart drawing refs
+  const isDrawingHeartRef = React.useRef<boolean>(false);
+  const heartStartRef = React.useRef<{x: number; y: number} | null>(null);
+  const heartCounterRef = React.useRef<number>(0);
+  const pendingHeartNameRef = React.useRef<string | null>(null);
+  // Diamond drawing refs
+  const isDrawingDiamondRef = React.useRef<boolean>(false);
+  const diamondStartRef = React.useRef<{x: number; y: number} | null>(null);
+  const diamondCounterRef = React.useRef<number>(0);
+  const pendingDiamondNameRef = React.useRef<string | null>(null);
+  // Shape unified refs - đã được sử dụng trong các hàm xử lý
+  // const isDrawingShapeRef = React.useRef<boolean>(false);
+  // const shapeStartRef = React.useRef<{x: number; y: number} | null>(null);
+  // const shapeCounterRef = React.useRef<number>(0);
+  // const pendingShapeNameRef = React.useRef<string | null>(null);
   // Lịch sử undo cho circles
   const [circleUndoHistory, setCircleUndoHistory] = useState<
     {name: string; ath: number; atv: number; diameter: number}[]
   >([]);
+
+  // Global timeout để tránh app bị đứng yên (chỉ khi thực sự cần thiết)
+  React.useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+
+    // Chỉ set timeout khi có state active và không có tương tác trong thời gian dài
+    if (shapeMode || freeHandMode || drawMode || moveMode || scaleMode) {
+      timeoutId = setTimeout(() => {
+        // Chỉ log debug thay vì warning
+        console.log('Resetting inactive drawing modes...');
+        setShapeMode(false);
+        setFreeHandMode(false);
+        setDrawMode(false);
+        setMoveMode(false);
+        setScaleMode(false);
+      }, 30000); // Tăng lên 30 giây để ít aggressive hơn
+    }
+
+    return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [shapeMode, freeHandMode, drawMode, moveMode, scaleMode]);
 
   const exportStrokes = async () => {
     try {
@@ -150,7 +207,10 @@ export const Simple360Painter: React.FC = () => {
       const fileName = `strokes_${Date.now()}.json`;
       const path = `${RNFS.DocumentDirectoryPath}/${fileName}`;
       await RNFS.writeFile(path, payload, 'utf8');
-      await Share.share({url: 'file://' + path, message: `Đã lưu: ${fileName}`});
+      await Share.share({
+        url: 'file://' + path,
+        message: `Đã lưu: ${fileName}`,
+      });
     } catch (err) {
       Alert.alert('Lỗi', 'Không thể lưu file');
     }
@@ -167,9 +227,10 @@ export const Simple360Painter: React.FC = () => {
       savedStrokes.forEach(s => removeStroke(webRef, s.name));
       // Lưu và vẽ lại
       setSavedStrokes(parsed);
-      await AsyncStorage.setItem('freehand_strokes', JSON.stringify(parsed)).catch(
-        () => {},
-      );
+      await AsyncStorage.setItem(
+        'freehand_strokes',
+        JSON.stringify(parsed),
+      ).catch(() => {});
       // Hydrate lên viewer nếu web sẵn sàng
       if (webReady) {
         parsed.forEach(s => renderFreehandStroke(webRef, s.name, s.points));
@@ -260,7 +321,12 @@ export const Simple360Painter: React.FC = () => {
   };
 
   const handleCircleMove = (e: any) => {
-    if (!shapeMode || shapeType !== 'circle' || !isDrawingCircleRef.current || !circleStartRef.current) {
+    if (
+      !shapeMode ||
+      shapeType !== 'circle' ||
+      !isDrawingCircleRef.current ||
+      !circleStartRef.current
+    ) {
       return;
     }
     const x = Math.round(e.nativeEvent.locationX);
@@ -300,7 +366,12 @@ export const Simple360Painter: React.FC = () => {
   };
 
   const handleStarMove = (e: any) => {
-    if (!shapeMode || shapeType !== 'star' || !isDrawingStarRef.current || !starStartRef.current) {
+    if (
+      !shapeMode ||
+      shapeType !== 'star' ||
+      !isDrawingStarRef.current ||
+      !starStartRef.current
+    ) {
       return;
     }
     const x = Math.round(e.nativeEvent.locationX);
@@ -340,7 +411,12 @@ export const Simple360Painter: React.FC = () => {
   };
 
   const handleArrowMove = (e: any) => {
-    if (!shapeMode || shapeType !== 'arrow' || !isDrawingArrowRef.current || !arrowStartRef.current) {
+    if (
+      !shapeMode ||
+      shapeType !== 'arrow' ||
+      !isDrawingArrowRef.current ||
+      !arrowStartRef.current
+    ) {
       return;
     }
     const x = Math.round(e.nativeEvent.locationX);
@@ -366,9 +442,166 @@ export const Simple360Painter: React.FC = () => {
     setShapeMode(false);
   };
 
+  // Vẽ trái tim: start/move/end
+  const handleHeartStart = (e: any) => {
+    if (!shapeMode || shapeType !== 'heart') {
+      return;
+    }
+    const x = Math.round(e.nativeEvent.locationX);
+    const y = Math.round(e.nativeEvent.locationY);
+    isDrawingHeartRef.current = true;
+    heartStartRef.current = {x, y};
+    startHeart(webRef, x, y);
+  };
+
+  const handleHeartMove = (e: any) => {
+    if (
+      !shapeMode ||
+      shapeType !== 'heart' ||
+      !isDrawingHeartRef.current ||
+      !heartStartRef.current
+    ) {
+      return;
+    }
+    const x = Math.round(e.nativeEvent.locationX);
+    const y = Math.round(e.nativeEvent.locationY);
+    const dx = x - heartStartRef.current.x;
+    const dy = y - heartStartRef.current.y;
+    const diameter = Math.sqrt(dx * dx + dy * dy) * 2;
+    resizeHeart(webRef, diameter);
+  };
+
+  const handleHeartEnd = () => {
+    if (!shapeMode || shapeType !== 'heart' || !isDrawingHeartRef.current) {
+      return;
+    }
+
+    // Thêm timeout để tránh app bị đứng yên
+    const timeoutId = setTimeout(() => {
+      console.warn('Heart finalize timeout, resetting state...');
+      isDrawingHeartRef.current = false;
+      heartStartRef.current = null;
+      setShapeMode(false);
+    }, 3000); // 3 giây timeout
+
+    try {
+      isDrawingHeartRef.current = false;
+      const num = ++heartCounterRef.current;
+      const name = `heart_${Date.now()}_${num}`;
+      pendingHeartNameRef.current = name;
+
+      console.log('Finalizing heart:', name);
+
+      // Wrap finalizeHeart trong try-catch riêng
+      try {
+        finalizeHeart(webRef, name);
+        console.log('Heart finalized successfully');
+      } catch (finalizeError) {
+        console.error('Lỗi khi finalize heart:', finalizeError);
+        // Không cần throw error, tiếp tục xử lý
+      }
+
+      // Post hotspot points với timeout ngắn hơn
+      setTimeout(() => {
+        try {
+          postHotspotPointsDelayed(webRef, name, 'freehand_points', 60);
+        } catch (error) {
+          console.error('Lỗi khi post hotspot points:', error);
+        }
+      }, 50);
+
+      heartStartRef.current = null;
+      // Thoát chế độ vẽ để có thể xoay 360 ngay sau khi thả
+      setShapeMode(false);
+
+      // Clear timeout nếu thành công
+      clearTimeout(timeoutId);
+    } catch (error) {
+      console.error('Lỗi khi finalize heart:', error);
+      // Reset state để tránh app bị đứng yên
+      isDrawingHeartRef.current = false;
+      heartStartRef.current = null;
+      setShapeMode(false);
+      clearTimeout(timeoutId);
+    }
+  };
+
+  // Vẽ kim cương: start/move/end
+  const handleDiamondStart = (e: any) => {
+    if (!shapeMode || shapeType !== 'diamond') {
+      return;
+    }
+    const x = Math.round(e.nativeEvent.locationX);
+    const y = Math.round(e.nativeEvent.locationY);
+    isDrawingDiamondRef.current = true;
+    diamondStartRef.current = {x, y};
+    startDiamond(webRef, x, y);
+  };
+
+  const handleDiamondMove = (e: any) => {
+    if (
+      !shapeMode ||
+      shapeType !== 'diamond' ||
+      !isDrawingDiamondRef.current ||
+      !diamondStartRef.current
+    ) {
+      return;
+    }
+    const x = Math.round(e.nativeEvent.locationX);
+    const y = Math.round(e.nativeEvent.locationY);
+    const dx = x - diamondStartRef.current.x;
+    const dy = y - diamondStartRef.current.y;
+    const diameter = Math.sqrt(dx * dx + dy * dy) * 2;
+    resizeDiamond(webRef, diameter);
+  };
+
+  const handleDiamondEnd = () => {
+    if (!shapeMode || shapeType !== 'diamond' || !isDrawingDiamondRef.current) {
+      return;
+    }
+    try {
+      isDrawingDiamondRef.current = false;
+      const num = ++diamondCounterRef.current;
+      const name = `diamond_${Date.now()}_${num}`;
+      pendingDiamondNameRef.current = name;
+
+      console.log('Finalizing diamond:', name);
+      finalizeDiamond(webRef, name);
+
+      // Thêm timeout để tránh app bị đứng yên
+      setTimeout(() => {
+        try {
+          postHotspotPointsDelayed(webRef, name, 'freehand_points', 60);
+        } catch (error) {
+          console.error('Lỗi khi post hotspot points:', error);
+        }
+      }, 100);
+
+      diamondStartRef.current = null;
+      // Thoát chế độ vẽ để có thể xoay 360 ngay sau khi thả
+      setShapeMode(false);
+    } catch (error) {
+      console.error('Lỗi khi finalize diamond:', error);
+      // Reset state để tránh app bị đứng yên
+      isDrawingDiamondRef.current = false;
+      diamondStartRef.current = null;
+      setShapeMode(false);
+    }
+  };
+
   // Các hàm xử lý chế độ di chuyển (pan gesture)
   // Ref để lưu trữ vị trí touch cuối cùng để tính toán độ lệch
   const lastTouchRef = React.useRef<{x: number; y: number} | null>(null);
+  // Ref để lưu trữ kích thước ban đầu khi bắt đầu phóng to/thu nhỏ
+  const initialSizeRef = React.useRef<{width: number; height: number} | null>(
+    null,
+  );
+  // Ref lưu khoảng cách kéo trước đó để tính delta cho scale theo hướng kéo
+  const prevDragDistanceRef = React.useRef<number>(0);
+  // Tích luỹ hệ số scale từ khi bắt đầu (chỉ cho stroke)
+  const cumulativeScaleRef = React.useRef<number>(1);
+  // Ref để lưu trữ khoảng cách ban đầu giữa 2 ngón tay (cho pinch gesture) - đã thay thế bằng kéo từ góc
+  // const initialDistanceRef = React.useRef<number | null>(null);
 
   // Hàm xử lý bắt đầu di chuyển khi người dùng chạm vào màn hình
   const onMoveStart = (e: any) => {
@@ -379,24 +612,28 @@ export const Simple360Painter: React.FC = () => {
     const x = Math.round(e.nativeEvent.locationX);
     const y = Math.round(e.nativeEvent.locationY);
     lastTouchRef.current = {x, y};
-    
+
     // Lưu vị trí cũ của stroke đang được chọn để có thể redo
     if (selectedStrokeRef.current) {
-      const currentStroke = savedStrokes.find(s => s.name === selectedStrokeRef.current);
+      const currentStroke = savedStrokes.find(
+        s => s.name === selectedStrokeRef.current,
+      );
       if (currentStroke) {
         console.log('Lưu vị trí cũ của stroke:', currentStroke.name);
         setPositionHistory(prev => [...prev, {...currentStroke}]);
       }
     }
-    
+
     // Lưu vị trí cũ của circle đang được chọn để có thể redo
     if (selectedCircleRef.current) {
-      const currentCircle = savedCircles.find(c => c.name === selectedCircleRef.current);
+      const currentCircle = savedCircles.find(
+        c => c.name === selectedCircleRef.current,
+      );
       if (currentCircle) {
         setCirclePositionHistory(prev => [...prev, {...currentCircle}]);
       }
     }
-    
+
     // Hit-test để chọn stroke dưới ngón tay
     const names = savedStrokes.map(s => s.name);
     if (names.length) {
@@ -470,6 +707,180 @@ export const Simple360Painter: React.FC = () => {
     lastTouchRef.current = null;
   };
 
+  // Hàm helper tính khoảng cách giữa 2 điểm touch
+  const calculateDistance = (
+    touch1: {x: number; y: number},
+    touch2: {x: number; y: number},
+  ): number => {
+    const dx = touch1.x - touch2.x;
+    const dy = touch1.y - touch2.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  // Hàm xử lý bắt đầu phóng to/thu nhỏ
+  const onScaleStart = (e: any) => {
+    if (!scaleMode) {
+      console.log('Scale mode not active');
+      return;
+    }
+
+    console.log('Scale start triggered');
+    // Lấy thông tin touch events
+    const touches = e.nativeEvent.touches;
+
+    if (touches.length === 1) {
+      const x = Math.round(touches[0].locationX);
+      const y = Math.round(touches[0].locationY);
+
+      console.log('Touch position:', {x, y});
+
+      // Lưu vị trí bắt đầu để tính toán khoảng cách kéo
+      lastTouchRef.current = {x, y};
+      prevDragDistanceRef.current = 0;
+      cumulativeScaleRef.current = 1;
+
+      // Thử chọn circle trước
+      const cnames = savedCircles.map(c => c.name);
+      if (cnames.length) {
+        console.log('Testing circles:', cnames);
+        hitTestCircles(webRef, cnames, x, y, 50, 'select_circle_for_scale');
+      }
+
+      // Thử chọn stroke (luôn thử, không phụ thuộc vào selectedCircleRef)
+      const names = savedStrokes.map(s => s.name);
+      if (names.length) {
+        console.log('Testing strokes:', names);
+        hitTestStrokes(webRef, names, x, y, 50, 'select_stroke_for_scale');
+      }
+
+      // Lưu kích thước ban đầu của hotspot đang được chọn
+      if (selectedCircleRef.current) {
+        const currentCircle = savedCircles.find(
+          c => c.name === selectedCircleRef.current,
+        );
+        if (currentCircle) {
+          initialSizeRef.current = {
+            width: currentCircle.diameter,
+            height: currentCircle.diameter,
+          };
+          console.log('Initial size for circle:', initialSizeRef.current);
+        }
+      } else if (selectedStrokeRef.current) {
+        // Lưu kích thước của stroke (có thể cần implement)
+        initialSizeRef.current = {width: 100, height: 100}; // Default size
+        console.log('Initial size for stroke:', initialSizeRef.current);
+      } else {
+        console.log('No hotspot selected yet');
+      }
+    }
+  };
+
+  // Hàm xử lý phóng to/thu nhỏ trong khi người dùng kéo ngón tay
+  const onScale = (e: any) => {
+    if (!scaleMode || !lastTouchRef.current || !initialSizeRef.current) {
+      console.log('Scale mode not ready:', {
+        scaleMode,
+        hasLastTouch: !!lastTouchRef.current,
+        hasInitialSize: !!initialSizeRef.current,
+      });
+      return;
+    }
+
+    const touches = e.nativeEvent.touches;
+    if (touches.length === 1) {
+      const currentX = touches[0].locationX;
+      const currentY = touches[0].locationY;
+
+      // Tính khoảng cách từ vị trí bắt đầu đến vị trí hiện tại (kéo từ góc)
+      const dragDistance = calculateDistance(lastTouchRef.current, {
+        x: currentX,
+        y: currentY,
+      });
+
+      console.log('Scale calculation:', {
+        dragDistance,
+        initialWidth: initialSizeRef.current.width,
+        selectedCircle: selectedCircleRef.current,
+        selectedStroke: selectedStrokeRef.current,
+      });
+
+      // Circle: dùng absolute width theo khoảng cách từ điểm bắt đầu
+      const scaleRatio = Math.max(0.1, 1 + (dragDistance - 50) / 100);
+      let newWidth = Math.round(initialSizeRef.current.width * scaleRatio);
+      // Giới hạn min/max cho circle
+      newWidth = Math.max(
+        MIN_CIRCLE_DIAMETER,
+        Math.min(MAX_CIRCLE_DIAMETER, newWidth),
+      );
+
+      console.log('New width calculated:', newWidth, 'scaleRatio:', scaleRatio);
+
+      // Áp dụng kích thước mới cho hotspot đang được chọn
+      if (selectedCircleRef.current) {
+        console.log(
+          'Resizing circle:',
+          selectedCircleRef.current,
+          'to width:',
+          newWidth,
+        );
+        resizeCircle(webRef, newWidth);
+      } else if (selectedStrokeRef.current) {
+        // Stroke: scale theo delta quãng kéo (kéo ra -> factor > 1, kéo vào -> factor < 1)
+        const prev = prevDragDistanceRef.current;
+        const delta = dragDistance - prev;
+        // Nhạy vừa phải: mỗi 60px thay đổi ~ 1.0 lần
+        let factor = 1 + delta / 120;
+        // Giới hạn mỗi bước để không nhảy quá mạnh
+        factor = Math.max(0.7, Math.min(1.3, factor));
+        if (Math.abs(delta) > 0.5) {
+          // Áp dụng giới hạn tổng thể
+          const currentTotal = cumulativeScaleRef.current;
+          let nextTotal = currentTotal * factor;
+          nextTotal = Math.max(
+            MIN_SCALE_FACTOR,
+            Math.min(MAX_SCALE_FACTOR, nextTotal),
+          );
+          // Hệ số thực sự cần apply ở bước này để không vượt quá min/max
+          const stepFactor = nextTotal / currentTotal;
+          if (Math.abs(stepFactor - 1) > 0.001) {
+            console.log(
+              'Scaling stroke step:',
+              selectedStrokeRef.current,
+              'delta:',
+              delta,
+              'factor:',
+              stepFactor,
+              'total:',
+              nextTotal,
+            );
+            scaleStroke(webRef, selectedStrokeRef.current, stepFactor);
+            cumulativeScaleRef.current = nextTotal;
+          }
+          prevDragDistanceRef.current = dragDistance;
+        }
+      }
+    }
+  };
+
+  // Hàm xử lý kết thúc phóng to/thu nhỏ
+  const onScaleEnd = () => {
+    if (scaleMode) {
+      // Lưu kích thước mới vào state
+      if (selectedCircleRef.current) {
+        postHotspotProps(webRef, selectedCircleRef.current, 'circle_update');
+      }
+      // Lưu lại điểm mới của stroke sau khi scale để đồng bộ local
+      if (selectedStrokeRef.current) {
+        const name = selectedStrokeRef.current;
+        postHotspotPoints(webRef, name, 'stroke_points_update');
+      }
+    }
+    lastTouchRef.current = null;
+    initialSizeRef.current = null;
+    cumulativeScaleRef.current = 1;
+    prevDragDistanceRef.current = 0;
+  };
+
   // Hàm xử lý hoàn tác (undo) - xóa nét vẽ cuối cùng
   const undo = async () => {
     // Nếu có stroke đã lưu trong state thì xóa stroke cuối cùng
@@ -477,10 +888,10 @@ export const Simple360Painter: React.FC = () => {
       const last = savedStrokes[savedStrokes.length - 1];
       removeStroke(webRef, last.name);
       const next = savedStrokes.slice(0, -1);
-      
+
       // Lưu stroke bị xóa vào lịch sử undo để có thể redo
       setUndoHistory(prev => [...prev, last]);
-      
+
       setSavedStrokes(next);
       await AsyncStorage.setItem(
         'freehand_strokes',
@@ -498,8 +909,12 @@ export const Simple360Painter: React.FC = () => {
       const next = savedCircles.slice(0, -1);
       setCircleUndoHistory(prev => [...prev, last]);
       setSavedCircles(next);
-      await AsyncStorage.setItem('circles', JSON.stringify(next)).catch(() => {});
-      selectedCircleRef.current = next.length ? next[next.length - 1].name : null;
+      await AsyncStorage.setItem('circles', JSON.stringify(next)).catch(
+        () => {},
+      );
+      selectedCircleRef.current = next.length
+        ? next[next.length - 1].name
+        : null;
       return;
     }
     // Nếu state chưa có, thử lấy từ AsyncStorage để đảm bảo reset xong vẫn undo được
@@ -511,10 +926,10 @@ export const Simple360Painter: React.FC = () => {
           const last = parsed[parsed.length - 1];
           removeStroke(webRef, last.name);
           const next = parsed.slice(0, -1);
-          
+
           // Lưu stroke bị xóa vào lịch sử undo để có thể redo
           setUndoHistory(prev => [...prev, last]);
-          
+
           setSavedStrokes(next);
           await AsyncStorage.setItem(
             'freehand_strokes',
@@ -542,47 +957,51 @@ export const Simple360Painter: React.FC = () => {
     console.log('Redo được gọi');
     console.log('Position history length:', positionHistory.length);
     console.log('Undo history length:', undoHistory.length);
-    
+
     // Nếu có lịch sử vị trí thì khôi phục vị trí cũ
     if (positionHistory.length > 0) {
       console.log('Khôi phục vị trí cũ');
       // Lấy vị trí cũ cuối cùng
       const lastPosition = positionHistory[positionHistory.length - 1];
       const nextPositionHistory = positionHistory.slice(0, -1);
-      
+
       // Khôi phục vị trí cũ của stroke
       renderFreehandStroke(webRef, lastPosition.name, lastPosition.points);
-      
+
       // Cập nhật stroke trong danh sách đã lưu
-      const nextStrokes = savedStrokes.map(s => 
-        s.name === lastPosition.name ? lastPosition : s
+      const nextStrokes = savedStrokes.map(s =>
+        s.name === lastPosition.name ? lastPosition : s,
       );
       setSavedStrokes(nextStrokes);
-      
+
       // Cập nhật lịch sử vị trí
       setPositionHistory(nextPositionHistory);
-      
+
       // Lưu vào AsyncStorage
       await AsyncStorage.setItem(
         'freehand_strokes',
         JSON.stringify(nextStrokes),
       ).catch(() => {});
-      
+
       // Cập nhật stroke được chọn
       selectedStrokeRef.current = lastPosition.name;
       console.log('Đã khôi phục vị trí cũ của stroke:', lastPosition.name);
       return;
     }
-    
+
     // Nếu không có lịch sử vị trí stroke: khôi phục vị trí circle
     if (circlePositionHistory.length > 0) {
       const last = circlePositionHistory[circlePositionHistory.length - 1];
       const nextPos = circlePositionHistory.slice(0, -1);
       renderCircle(webRef, last.name, last.ath, last.atv, last.diameter);
-      const nextCircles = savedCircles.map(c => (c.name === last.name ? last : c));
+      const nextCircles = savedCircles.map(c =>
+        c.name === last.name ? last : c,
+      );
       setSavedCircles(nextCircles);
       setCirclePositionHistory(nextPos);
-      await AsyncStorage.setItem('circles', JSON.stringify(nextCircles)).catch(() => {});
+      await AsyncStorage.setItem('circles', JSON.stringify(nextCircles)).catch(
+        () => {},
+      );
       selectedCircleRef.current = last.name;
       return;
     }
@@ -594,20 +1013,20 @@ export const Simple360Painter: React.FC = () => {
       undoHistory.forEach(stroke => {
         renderFreehandStroke(webRef, stroke.name, stroke.points);
       });
-      
+
       // Thêm tất cả stroke vào danh sách đã lưu
       const nextStrokes = [...savedStrokes, ...undoHistory];
       setSavedStrokes(nextStrokes);
-      
+
       // Reset lịch sử undo
       setUndoHistory([]);
-      
+
       // Lưu vào AsyncStorage
       await AsyncStorage.setItem(
         'freehand_strokes',
         JSON.stringify(nextStrokes),
       ).catch(() => {});
-      
+
       // Cập nhật stroke được chọn (stroke cuối cùng)
       if (nextStrokes.length > 0) {
         selectedStrokeRef.current = nextStrokes[nextStrokes.length - 1].name;
@@ -623,13 +1042,15 @@ export const Simple360Painter: React.FC = () => {
       const nextCircles = [...savedCircles, ...circleUndoHistory];
       setSavedCircles(nextCircles);
       setCircleUndoHistory([]);
-      await AsyncStorage.setItem('circles', JSON.stringify(nextCircles)).catch(() => {});
+      await AsyncStorage.setItem('circles', JSON.stringify(nextCircles)).catch(
+        () => {},
+      );
       if (nextCircles.length > 0) {
         selectedCircleRef.current = nextCircles[nextCircles.length - 1].name;
       }
       return;
     }
-    
+
     console.log('Không có gì để redo');
   };
 
@@ -646,7 +1067,10 @@ export const Simple360Painter: React.FC = () => {
           setUndoHistory(prev => [...prev, deletedStroke]);
         }
         setSavedStrokes(next);
-        await AsyncStorage.setItem('freehand_strokes', JSON.stringify(next)).catch(() => {});
+        await AsyncStorage.setItem(
+          'freehand_strokes',
+          JSON.stringify(next),
+        ).catch(() => {});
         selectedStrokeRef.current = null;
         return;
       }
@@ -659,7 +1083,9 @@ export const Simple360Painter: React.FC = () => {
           setCircleUndoHistory(prev => [...prev, deletedCircle]);
         }
         setSavedCircles(nextC);
-        await AsyncStorage.setItem('circles', JSON.stringify(nextC)).catch(() => {});
+        await AsyncStorage.setItem('circles', JSON.stringify(nextC)).catch(
+          () => {},
+        );
         selectedCircleRef.current = null;
         return;
       }
@@ -682,7 +1108,7 @@ export const Simple360Painter: React.FC = () => {
       // Lưu tất cả stroke bị xóa vào lịch sử undo để có thể redo
       // KHÔNG reset lịch sử undo ở đây để có thể redo
       setUndoHistory(prev => [...prev, ...list]);
-      
+
       list.forEach(s => removeStroke(webRef, s.name));
     }
     setSavedStrokes([]);
@@ -702,8 +1128,9 @@ export const Simple360Painter: React.FC = () => {
     setDrawMode(v => !v);
     // Tắt chế độ vẽ tự do khi bật chế độ vẽ điểm
     setFreeHandMode(false);
-    // Tắt chế độ di chuyển khi bật chế độ vẽ điểm
+    // Tắt chế độ di chuyển và phóng to/thu nhỏ khi bật chế độ vẽ điểm
     setMoveMode(false);
+    setScaleMode(false);
   };
 
   // Hàm chuyển đổi chế độ vẽ tự do (toggle)
@@ -712,8 +1139,9 @@ export const Simple360Painter: React.FC = () => {
     setFreeHandMode(v => !v);
     // Tắt chế độ vẽ điểm khi bật chế độ vẽ tự do
     setDrawMode(false);
-    // Tắt chế độ di chuyển khi bật chế độ vẽ tự do
+    // Tắt chế độ di chuyển và phóng to/thu nhỏ khi bật chế độ vẽ tự do
     setMoveMode(false);
+    setScaleMode(false);
     // Tắt chế độ vẽ hình
     setShapeMode(false);
   };
@@ -728,6 +1156,7 @@ export const Simple360Painter: React.FC = () => {
       setDrawMode(false);
       setFreeHandMode(false);
       setShapeMode(false);
+      setScaleMode(false);
       // Tự động chọn stroke cuối cùng
       if (savedStrokes.length) {
         const last = savedStrokes[savedStrokes.length - 1].name;
@@ -773,6 +1202,7 @@ export const Simple360Painter: React.FC = () => {
     setDrawMode(false);
     setFreeHandMode(false);
     setMoveMode(false);
+    setScaleMode(false);
   };
 
   // Hook useEffect để đồng bộ trạng thái được chọn giữa các chế độ vẽ
@@ -810,7 +1240,12 @@ export const Simple360Painter: React.FC = () => {
         }
         const rawCir = await AsyncStorage.getItem('circles');
         if (!cancelled && rawCir) {
-          const parsedCir: {name: string; ath: number; atv: number; diameter: number}[] = JSON.parse(rawCir);
+          const parsedCir: {
+            name: string;
+            ath: number;
+            atv: number;
+            diameter: number;
+          }[] = JSON.parse(rawCir);
           setSavedCircles(parsedCir);
         }
       } catch (_) {
@@ -830,9 +1265,6 @@ export const Simple360Painter: React.FC = () => {
     savedStrokes.forEach(s => {
       renderFreehandStroke(webRef, s.name, s.points);
     });
-    savedCircles.forEach(c => {
-      renderCircle(webRef, c.name, c.ath, c.atv, c.diameter);
-    });
   }, [webReady, savedStrokes]);
 
   React.useEffect(() => {
@@ -843,6 +1275,51 @@ export const Simple360Painter: React.FC = () => {
       renderCircle(webRef, c.name, c.ath, c.atv, c.diameter);
     });
   }, [webReady, savedCircles]);
+
+  React.useEffect(() => {
+    if (!webReady) {
+      return;
+    }
+    savedCircles.forEach(c => {
+      renderCircle(webRef, c.name, c.ath, c.atv, c.diameter);
+    });
+  }, [webReady, savedCircles]);
+
+  // Hàm chuyển đổi chế độ phóng to/thu nhỏ (toggle)
+  const toggleScaleMode = () => {
+    const next = !scaleMode;
+    // Chuyển trạng thái phóng to/thu nhỏ
+    setScaleMode(next);
+    if (next) {
+      // Tắt các chế độ vẽ khi bật phóng to/thu nhỏ
+      setDrawMode(false);
+      setFreeHandMode(false);
+      setShapeMode(false);
+      setMoveMode(false);
+      // Tự động chọn stroke cuối cùng
+      if (savedStrokes.length) {
+        const last = savedStrokes[savedStrokes.length - 1].name;
+        selectedStrokeRef.current = last;
+        setStrokeSelected(webRef, last, true);
+      }
+      // Tự động chọn circle cuối cùng
+      if (savedCircles.length) {
+        const lastC = savedCircles[savedCircles.length - 1].name;
+        selectedCircleRef.current = lastC;
+        setCircleSelected(webRef, lastC, true);
+      }
+    } else {
+      // Tắt highlight khi tắt phóng to/thu nhỏ
+      if (selectedStrokeRef.current) {
+        setStrokeSelected(webRef, selectedStrokeRef.current, false);
+        selectedStrokeRef.current = null;
+      }
+      if (selectedCircleRef.current) {
+        setCircleSelected(webRef, selectedCircleRef.current, false);
+        selectedCircleRef.current = null;
+      }
+    }
+  };
 
   // Render UI của component
   return (
@@ -900,12 +1377,22 @@ export const Simple360Painter: React.FC = () => {
               typeof data.atv === 'number'
             ) {
               const cname: string =
-                data.name || pendingCircleNameRef.current || `circle_${Date.now()}`;
-              const diameter: number = typeof data.width === 'number' ? Number(data.width) : 20;
-              const meta = {name: cname, ath: Number(data.ath), atv: Number(data.atv), diameter};
+                data.name ||
+                pendingCircleNameRef.current ||
+                `circle_${Date.now()}`;
+              const diameter: number =
+                typeof data.width === 'number' ? Number(data.width) : 20;
+              const meta = {
+                name: cname,
+                ath: Number(data.ath),
+                atv: Number(data.atv),
+                diameter,
+              };
               setSavedCircles(prev => {
                 const next = [...prev, meta];
-                AsyncStorage.setItem('circles', JSON.stringify(next)).catch(() => {});
+                AsyncStorage.setItem('circles', JSON.stringify(next)).catch(
+                  () => {},
+                );
                 return next;
               });
               pendingCircleNameRef.current = null;
@@ -915,13 +1402,18 @@ export const Simple360Painter: React.FC = () => {
               const name: string | null = data.name || null;
               if (name) {
                 // Lưu vị trí cũ của stroke trước khi chọn để có thể redo
-                if (selectedStrokeRef.current && selectedStrokeRef.current !== name) {
-                  const currentStroke = savedStrokes.find(s => s.name === selectedStrokeRef.current);
+                if (
+                  selectedStrokeRef.current &&
+                  selectedStrokeRef.current !== name
+                ) {
+                  const currentStroke = savedStrokes.find(
+                    s => s.name === selectedStrokeRef.current,
+                  );
                   if (currentStroke) {
                     setPositionHistory(prev => [...prev, {...currentStroke}]);
                   }
                 }
-                
+
                 if (
                   selectedStrokeRef.current &&
                   selectedStrokeRef.current !== name
@@ -936,11 +1428,60 @@ export const Simple360Painter: React.FC = () => {
             if (data && data.type === 'hit_circle') {
               const name: string | null = data.name || null;
               if (name) {
-                if (selectedCircleRef.current && selectedCircleRef.current !== name) {
+                if (
+                  selectedCircleRef.current &&
+                  selectedCircleRef.current !== name
+                ) {
                   setCircleSelected(webRef, selectedCircleRef.current, false);
                 }
                 selectedCircleRef.current = name;
                 setCircleSelected(webRef, name, true);
+              }
+              return;
+            }
+            // Xử lý chọn circle cho chế độ phóng to/thu nhỏ
+            if (data && data.type === 'select_circle_for_scale') {
+              const name: string | null = data.name || null;
+              console.log('Circle selected for scale:', name);
+              if (name) {
+                // Bỏ chọn circle cũ nếu có
+                if (
+                  selectedCircleRef.current &&
+                  selectedCircleRef.current !== name
+                ) {
+                  setCircleSelected(webRef, selectedCircleRef.current, false);
+                }
+                // Bỏ chọn stroke nếu có
+                if (selectedStrokeRef.current) {
+                  setStrokeSelected(webRef, selectedStrokeRef.current, false);
+                  selectedStrokeRef.current = null;
+                }
+                // Chọn circle mới
+                selectedCircleRef.current = name;
+                setCircleSelected(webRef, name, true);
+                console.log('Circle selected successfully:', name);
+              }
+              return;
+            }
+            // Xử lý chọn stroke cho chế độ phóng to/thu nhỏ
+            if (data && data.type === 'select_stroke_for_scale') {
+              const name: string | null = data.name || null;
+              if (name) {
+                // Bỏ chọn stroke cũ nếu có
+                if (
+                  selectedStrokeRef.current &&
+                  selectedStrokeRef.current !== name
+                ) {
+                  setStrokeSelected(webRef, selectedStrokeRef.current, false);
+                }
+                // Bỏ chọn circle nếu có
+                if (selectedCircleRef.current) {
+                  setCircleSelected(webRef, selectedCircleRef.current, false);
+                  selectedCircleRef.current = null;
+                }
+                // Chọn stroke mới
+                selectedStrokeRef.current = name;
+                setStrokeSelected(webRef, name, true);
               }
               return;
             }
@@ -952,12 +1493,22 @@ export const Simple360Painter: React.FC = () => {
               typeof data.atv === 'number'
             ) {
               const updatedName: string = data.name;
-              const diameter: number = typeof data.width === 'number' ? Number(data.width) : 20;
+              const diameter: number =
+                typeof data.width === 'number' ? Number(data.width) : 20;
               setSavedCircles(prev => {
                 const next = prev.map(c =>
-                  c.name === updatedName ? {...c, ath: Number(data.ath), atv: Number(data.atv), diameter} : c,
+                  c.name === updatedName
+                    ? {
+                        ...c,
+                        ath: Number(data.ath),
+                        atv: Number(data.atv),
+                        diameter,
+                      }
+                    : c,
                 );
-                AsyncStorage.setItem('circles', JSON.stringify(next)).catch(() => {});
+                AsyncStorage.setItem('circles', JSON.stringify(next)).catch(
+                  () => {},
+                );
                 return next;
               });
               return;
@@ -991,11 +1542,15 @@ export const Simple360Painter: React.FC = () => {
           }
         }}
         // Điều khiển sự kiện touch: 'none' khi đang vẽ/di chuyển, 'auto' khi không
-        pointerEvents={drawMode || freeHandMode || shapeMode || moveMode ? 'none' : 'auto'}
+        pointerEvents={
+          drawMode || freeHandMode || shapeMode || moveMode || scaleMode
+            ? 'none'
+            : 'auto'
+        }
       />
 
-      {/* Overlay để bắt sự kiện tap khi ở chế độ vẽ điểm và không di chuyển */}
-      {drawMode && !moveMode && (
+      {/* Overlay để bắt sự kiện tap khi ở chế độ vẽ điểm và không di chuyển/phóng to */}
+      {drawMode && !moveMode && !scaleMode && (
         <TouchableOpacity
           // Style overlay phủ toàn màn hình
           style={styles.overlay}
@@ -1006,8 +1561,8 @@ export const Simple360Painter: React.FC = () => {
         />
       )}
 
-      {/* Overlay để bắt sự kiện vẽ tự do khi ở chế độ vẽ tự do và không di chuyển */}
-      {freeHandMode && !moveMode && (
+      {/* Overlay để bắt sự kiện vẽ tự do khi ở chế độ vẽ tự do và không di chuyển/phóng to */}
+      {freeHandMode && !moveMode && !scaleMode && (
         <View
           // Style overlay phủ toàn màn hình
           style={styles.overlay}
@@ -1026,18 +1581,64 @@ export const Simple360Painter: React.FC = () => {
         />
       )}
 
-
-
       {/* Overlay unified shape (tròn/sao) */}
-      {shapeMode && !moveMode && (
+      {shapeMode && !moveMode && !scaleMode && (
         <View
           style={styles.overlay}
           onStartShouldSetResponder={() => true}
           onMoveShouldSetResponder={() => true}
-          onResponderGrant={(e)=>{shapeType==='circle'?handleCircleStart(e):(shapeType==='star'?handleStarStart(e):handleArrowStart(e));}}
-          onResponderMove={(e)=>{shapeType==='circle'?handleCircleMove(e):(shapeType==='star'?handleStarMove(e):handleArrowMove(e));}}
-          onResponderRelease={()=>{shapeType==='circle'?handleCircleEnd():(shapeType==='star'?handleStarEnd():handleArrowEnd());}}
-          onResponderTerminate={()=>{shapeType==='circle'?handleCircleEnd():(shapeType==='star'?handleStarEnd():handleArrowEnd());}}
+          onResponderGrant={e => {
+            if (shapeType === 'circle') {
+              handleCircleStart(e);
+            } else if (shapeType === 'star') {
+              handleStarStart(e);
+            } else if (shapeType === 'arrow') {
+              handleArrowStart(e);
+            } else if (shapeType === 'heart') {
+              handleHeartStart(e);
+            } else if (shapeType === 'diamond') {
+              handleDiamondStart(e);
+            }
+          }}
+          onResponderMove={e => {
+            if (shapeType === 'circle') {
+              handleCircleMove(e);
+            } else if (shapeType === 'star') {
+              handleStarMove(e);
+            } else if (shapeType === 'arrow') {
+              handleArrowMove(e);
+            } else if (shapeType === 'heart') {
+              handleHeartMove(e);
+            } else if (shapeType === 'diamond') {
+              handleDiamondMove(e);
+            }
+          }}
+          onResponderRelease={() => {
+            if (shapeType === 'circle') {
+              handleCircleEnd();
+            } else if (shapeType === 'star') {
+              handleStarEnd();
+            } else if (shapeType === 'arrow') {
+              handleArrowEnd();
+            } else if (shapeType === 'heart') {
+              handleHeartEnd();
+            } else if (shapeType === 'diamond') {
+              handleDiamondEnd();
+            }
+          }}
+          onResponderTerminate={() => {
+            if (shapeType === 'circle') {
+              handleCircleEnd();
+            } else if (shapeType === 'star') {
+              handleStarEnd();
+            } else if (shapeType === 'arrow') {
+              handleArrowEnd();
+            } else if (shapeType === 'heart') {
+              handleHeartEnd();
+            } else if (shapeType === 'diamond') {
+              handleDiamondEnd();
+            }
+          }}
         />
       )}
 
@@ -1058,6 +1659,26 @@ export const Simple360Painter: React.FC = () => {
           onResponderRelease={onMoveEnd}
           // Xử lý khi bị gián đoạn di chuyển
           onResponderTerminate={onMoveEnd}
+        />
+      )}
+
+      {/* Overlay để bắt sự kiện phóng to/thu nhỏ khi ở chế độ phóng to/thu nhỏ */}
+      {scaleMode && (
+        <View
+          // Style overlay phủ toàn màn hình
+          style={styles.overlay}
+          // Luôn bắt đầu responder khi touch
+          onStartShouldSetResponder={() => true}
+          // Luôn bắt đầu responder khi di chuyển
+          onMoveShouldSetResponder={() => true}
+          // Xử lý bắt đầu phóng to/thu nhỏ
+          onResponderGrant={onScaleStart}
+          // Xử lý phóng to/thu nhỏ
+          onResponderMove={onScale}
+          // Xử lý kết thúc phóng to/thu nhỏ
+          onResponderRelease={onScaleEnd}
+          // Xử lý khi bị gián đoạn phóng to/thu nhỏ
+          onResponderTerminate={onScaleEnd}
         />
       )}
 
@@ -1111,26 +1732,53 @@ export const Simple360Painter: React.FC = () => {
         <TouchableOpacity
           style={[styles.toggleBtn, shapeMode && styles.toggleOnCircle]}
           onPress={toggleShapeMode}>
-          <Text style={styles.toggleText}>{shapeMode ? '🔷 Đang vẽ hình' : '🔷 Vẽ hình'}</Text>
+          <Text style={styles.toggleText}>
+            {shapeMode ? '🔷 Đang vẽ hình' : '🔷 Vẽ hình'}
+          </Text>
         </TouchableOpacity>
 
         {/* Selector loại hình khi bật vẽ hình */}
         {shapeMode && (
-          <View style={{gap: 8}}>
+          <View style={styles.shapeSelector}>
             <TouchableOpacity
-              style={[styles.toggleBtn, shapeType === 'circle' && styles.toggleOnCircle]}
+              style={[
+                styles.toggleBtn,
+                shapeType === 'circle' && styles.toggleOnCircle,
+              ]}
               onPress={() => setShapeType('circle')}>
               <Text style={styles.toggleText}>⭕ Tròn</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.toggleBtn, shapeType === 'star' && styles.toggleOnCircle]}
+              style={[
+                styles.toggleBtn,
+                shapeType === 'star' && styles.toggleOnCircle,
+              ]}
               onPress={() => setShapeType('star')}>
               <Text style={styles.toggleText}>⭐ Sao</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.toggleBtn, shapeType === 'arrow' && styles.toggleOnCircle]}
+              style={[
+                styles.toggleBtn,
+                shapeType === 'arrow' && styles.toggleOnCircle,
+              ]}
               onPress={() => setShapeType('arrow')}>
               <Text style={styles.toggleText}>➡️ Mũi tên</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.toggleBtn,
+                shapeType === 'heart' && styles.toggleOnCircle,
+              ]}
+              onPress={() => setShapeType('heart')}>
+              <Text style={styles.toggleText}>💖 Trái tim</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.toggleBtn,
+                shapeType === 'diamond' && styles.toggleOnCircle,
+              ]}
+              onPress={() => setShapeType('diamond')}>
+              <Text style={styles.toggleText}>💎 Kim cương</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -1155,21 +1803,30 @@ export const Simple360Painter: React.FC = () => {
       </View>
 
       {/* Container chứa các button điều khiển vẽ (hiển thị khi có chế độ thao tác) */}
-      {(drawMode || freeHandMode || shapeMode || moveMode) && (
+      {(drawMode || freeHandMode || shapeMode || moveMode || scaleMode) && (
         <View style={styles.controlsVert} pointerEvents="box-none">
           {/* Button hoàn tác (undo) */}
           <TouchableOpacity style={[styles.btn, styles.undo]} onPress={undo}>
             <Text style={styles.btnText}>↩️</Text>
           </TouchableOpacity>
           {/* Button làm lại (redo) */}
-          <TouchableOpacity 
+          <TouchableOpacity
             style={[
-              styles.btn, 
-              (positionHistory.length > 0 || undoHistory.length > 0 || circlePositionHistory.length > 0 || circleUndoHistory.length > 0) ? styles.redo : styles.redoDisabled
-            ]} 
+              styles.btn,
+              positionHistory.length > 0 ||
+              undoHistory.length > 0 ||
+              circlePositionHistory.length > 0 ||
+              circleUndoHistory.length > 0
+                ? styles.redo
+                : styles.redoDisabled,
+            ]}
             onPress={redo}
-            disabled={positionHistory.length === 0 && undoHistory.length === 0 && circlePositionHistory.length === 0 && circleUndoHistory.length === 0}
-          >
+            disabled={
+              positionHistory.length === 0 &&
+              undoHistory.length === 0 &&
+              circlePositionHistory.length === 0 &&
+              circleUndoHistory.length === 0
+            }>
             <Text style={styles.btnText}>↪️</Text>
           </TouchableOpacity>
           {/* Button xóa (clear) */}
@@ -1192,6 +1849,14 @@ export const Simple360Painter: React.FC = () => {
             // Xử lý sự kiện press để toggle chế độ di chuyển
             onPress={toggleMoveMode}>
             <Text style={styles.btnText}>↔️</Text>
+          </TouchableOpacity>
+          {/* Button toggle chế độ phóng to/thu nhỏ */}
+          <TouchableOpacity
+            // Style button với trạng thái active khi scaleMode = true
+            style={[styles.btn, scaleMode ? styles.scaleOn : styles.scale]}
+            // Xử lý sự kiện press để toggle chế độ phóng to/thu nhỏ
+            onPress={toggleScaleMode}>
+            <Text style={styles.btnText}>🔍</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -1295,6 +1960,10 @@ const styles = StyleSheet.create({
   move: {backgroundColor: 'rgba(88,86,214,0.95)'}, // Tím trong suốt 95%
   // Style cho button di chuyển khi đang bật (active state) - màu xanh lá nổi bật
   moveOn: {backgroundColor: '#34C759'},
+  // Style cho button phóng to/thu nhỏ (scale) - màu xanh dương
+  scale: {backgroundColor: 'rgba(10,132,255,0.95)'}, // Xanh dương trong suốt 95%
+  // Style cho button phóng to/thu nhỏ khi đang bật (active state) - màu xanh lá nổi bật
+  scaleOn: {backgroundColor: '#30D158'},
   // Style cho text trong các button điều khiển
   btnText: {color: '#fff', fontSize: 22, fontWeight: '700'}, // Chữ trắng, size 22, đậm
   // Style cho nút xóa theo ý muốn
@@ -1304,6 +1973,8 @@ const styles = StyleSheet.create({
   // Style cho nút redo (bật/tắt)
   redo: {backgroundColor: 'rgba(255,159,10,0.95)'},
   redoDisabled: {backgroundColor: 'rgba(60,60,67,0.85)'},
+  // Style cho selector loại hình
+  shapeSelector: {gap: 8},
   // Modal styles
   modalBackdrop: {
     position: 'absolute',
@@ -1333,8 +2004,17 @@ const styles = StyleSheet.create({
     padding: 10,
     textAlignVertical: 'top',
   },
-  modalActions: {flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12},
-  modalBtn: {paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, marginLeft: 10},
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 12,
+  },
+  modalBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginLeft: 10,
+  },
   modalCancel: {backgroundColor: 'rgba(60,60,67,0.85)'},
   modalOk: {backgroundColor: '#0A84FF'},
   modalBtnText: {color: '#fff', fontWeight: '700'},

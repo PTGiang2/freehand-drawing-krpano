@@ -1,3 +1,9 @@
+// ================================================================
+// Chế độ vẽ tự do (Freehand)
+// - start/move/finalize một nét polyline tạm và cố định
+// - di chuyển toàn bộ stroke, render/hydrate, chọn/bỏ chọn
+// - scale stroke quanh trọng tâm (được dùng bởi chế độ phóng to/thu nhỏ)
+// ================================================================
 // Import kiểu RefObject từ React để tham chiếu đến WebView component
 import type {RefObject} from 'react';
 // Import kiểu WebView từ thư viện react-native-webview để tương tác với web content
@@ -6,9 +12,13 @@ import type {WebView} from 'react-native-webview';
 import {sendKrpano} from './KrpanoBridge';
 
 // Kiểu điểm trên mặt cầu
+/** Điểm (ath/atv) trong không gian cầu của krpano */
 export type SpherePoint = {ath: number; atv: number};
 
-// Bắt đầu một nét vẽ tự do mới dưới dạng một hotspot polyline duy nhất
+/**
+ * Bắt đầu một nét vẽ tự do tạm thời (hotspot 'freehand_path').
+ * - Khởi tạo polyline, thêm điểm đầu tiên tại vị trí chạm.
+ */
 export function startFreehand(
   // Tham chiếu đến WebView component đang hiển thị krpano viewer
   webRef: RefObject<WebView>,
@@ -50,7 +60,7 @@ export function startFreehand(
   sendKrpano(webRef, cmds);
 }
 
-// Thêm một điểm mới vào polyline hiện tại khi người dùng kéo chuột
+/** Thêm điểm tiếp theo vào polyline freehand tạm khi đang kéo. */
 export function moveFreehand(webRef: RefObject<WebView>, x: number, y: number) {
   // Tạo mảng chứa các lệnh krpano để thêm điểm mới
   const cmds = [
@@ -75,7 +85,9 @@ export function moveFreehand(webRef: RefObject<WebView>, x: number, y: number) {
   sendKrpano(webRef, cmds);
 }
 
-// Di chuyển toàn bộ polyline theo độ lệch giữa hai lần chạm/kéo (pan gesture)
+/**
+ * Di chuyển toàn bộ polyline freehand tạm theo độ lệch giữa hai lần chạm.
+ */
 export function moveAllFreehand(
   // Tham chiếu đến WebView component
   webRef: RefObject<WebView>,
@@ -113,7 +125,7 @@ export function moveAllFreehand(
   sendKrpano(webRef, cmds);
 }
 
-// Xóa toàn bộ nét vẽ tự do (undo) - hiện tại xóa hết, có thể cải thiện sau để chỉ xóa điểm cuối
+/** Xóa polyline freehand tạm (hoàn tác nét đang vẽ). */
 export function undoFreehand(webRef: RefObject<WebView>) {
   // Tạo mảng chứa các lệnh krpano để xóa polyline
   const cmds = [
@@ -126,7 +138,7 @@ export function undoFreehand(webRef: RefObject<WebView>) {
   sendKrpano(webRef, cmds);
 }
 
-// Xóa nét vẽ tự do hiện tại (clear)
+/** Xóa sạch freehand tạm và reset chỉ số điểm. */
 export function clearFreehand(webRef: RefObject<WebView>) {
   // Tạo mảng chứa các lệnh krpano để xóa polyline
   const cmds = [
@@ -139,7 +151,7 @@ export function clearFreehand(webRef: RefObject<WebView>) {
   sendKrpano(webRef, cmds);
 }
 
-// Làm nổi bật (chọn) hoặc bỏ nổi bật nét vẽ tự do bằng cách thay đổi màu và độ dày viền
+/** Bật/tắt highlight cho freehand tạm bằng cách đổi màu/độ dày viền. */
 export function setFreehandSelected(
   // Tham chiếu đến WebView component
   webRef: RefObject<WebView>,
@@ -165,7 +177,7 @@ export function setFreehandSelected(
   sendKrpano(webRef, cmds);
 }
 
-// Đặt trạng thái highlight cho một stroke đã lưu (theo tên hotspot)
+/** Bật/tắt highlight cho một stroke đã finalize (theo tên). */
 export function setStrokeSelected(
   webRef: RefObject<WebView>,
   strokeName: string,
@@ -183,14 +195,17 @@ export function setStrokeSelected(
   sendKrpano(webRef, cmds);
 }
 
-// Xóa một stroke đã lưu theo tên
+/** Xóa một stroke đã finalize theo tên hotspot. */
 export function removeStroke(webRef: RefObject<WebView>, strokeName: string) {
   const safeName = strokeName.replace(/[^a-zA-Z0-9_\-]/g, '_');
   const cmds = `if(hotspot['${safeName}'], removehotspot('${safeName}'); );`;
   sendKrpano(webRef, cmds);
 }
 
-// Di chuyển một stroke đã lưu theo độ lệch chuột (dựa vào prev và cur screen xy)
+/**
+ * Di chuyển một stroke đã finalize dựa trên độ lệch hai lần chạm.
+ * - Dịch chuyển toàn bộ điểm của stroke trong krpano.
+ */
 export function moveStroke(
   webRef: RefObject<WebView>,
   strokeName: string,
@@ -220,7 +235,59 @@ export function moveStroke(
   sendKrpano(webRef, cmds);
 }
 
-// Hoàn tất nét vẽ hiện tại: sao chép từ 'freehand_path' sang hotspot cố định mới và dọn temp
+/**
+ * Scale một stroke (polyline) quanh trọng tâm màn hình.
+ * - Tính trọng tâm trong screen-space, scale offset từng điểm, map lại sang sphere.
+ * - scaleFactor > 1: phóng to, < 1: thu nhỏ.
+ */
+export function scaleStroke(
+  webRef: RefObject<WebView>,
+  strokeName: string,
+  scaleFactor: number,
+) {
+  const safeName = strokeName.replace(/[^a-zA-Z0-9_\-]/g, '_');
+  // Build krpano commands to compute centroid in screen space then scale each point
+  const cmds = [
+    `if(hotspot['${safeName}'], `,
+    // Determine points count
+    `  set(_cnt, get(hotspot['${safeName}'].userdata.point_count));`,
+    '  if(!_cnt, set(_cnt, 4096));',
+    // Compute centroid in screen space
+    '  set(__sumx, 0); set(__sumy, 0);',
+    '  for(set(ii,0), ii LT _cnt, inc(ii), ',
+    `    if(hotspot['${safeName}'].point[get(ii)].ath, `,
+    `      copy(__ath, hotspot['${safeName}'].point[get(ii)].ath); `,
+    `      copy(__atv, hotspot['${safeName}'].point[get(ii)].atv); `,
+    '      spheretoscreen(get(__ath), get(__atv), __sx, __sy);',
+    '      set(__sumx, calc(__sumx + get(__sx)));',
+    '      set(__sumy, calc(__sumy + get(__sy)));',
+    '    );',
+    '  );',
+    '  if(_cnt GT 0, set(__cx, calc(__sumx / _cnt)); set(__cy, calc(__sumy / _cnt)); );',
+    // Scale each point around centroid
+    '  for(set(ii,0), ii LT _cnt, inc(ii), ',
+    `    if(hotspot['${safeName}'].point[get(ii)].ath, `,
+    `      copy(__ath, hotspot['${safeName}'].point[get(ii)].ath); `,
+    `      copy(__atv, hotspot['${safeName}'].point[get(ii)].atv); `,
+    '      spheretoscreen(get(__ath), get(__atv), __sx, __sy);',
+    // new screen position = centroid + (current - centroid) * scale
+    `      set(__nx, calc(__cx + (${Number(scaleFactor)} * (__sx - __cx))));`,
+    `      set(__ny, calc(__cy + (${Number(scaleFactor)} * (__sy - __cy))));`,
+    '      screentosphere(get(__nx), get(__ny), __ax, __av);',
+    `      set(hotspot['${safeName}'].point[get(ii)].ath, get(__ax)); `,
+    `      set(hotspot['${safeName}'].point[get(ii)].atv, get(__av)); `,
+    '    );',
+    '  );',
+    ');',
+  ].join(' ');
+  sendKrpano(webRef, cmds);
+}
+
+/**
+ * Cố định freehand tạm thành một hotspot polyline mới theo tên.
+ * - Sao chép toàn bộ điểm từ 'freehand_path' sang hotspot mới
+ * - Lưu số lượng điểm vào userdata.point_count để dùng cho move/scale
+ */
 export function finalizeFreehand(
   webRef: RefObject<WebView>,
   strokeName: string,
@@ -252,7 +319,9 @@ export function finalizeFreehand(
   sendKrpano(webRef, cmds);
 }
 
-// Vẽ lại một nét vẽ từ danh sách điểm đã lưu
+/**
+ * Vẽ lại (hydrate) một stroke đã lưu từ danh sách điểm (ath/atv).
+ */
 export function renderFreehandStroke(
   webRef: RefObject<WebView>,
   strokeName: string,

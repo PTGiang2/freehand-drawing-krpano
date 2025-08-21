@@ -1,3 +1,11 @@
+// ================================================================
+// Cầu nối (bridge) giữa React Native và krpano trong WebView
+// - Cung cấp các hàm tiện ích để gửi lệnh (call) vào krpano
+// - Lấy thông tin hotspot (điểm, polyline) và postMessage về RN
+// - Thực hiện hit-test để chọn hotspot theo vị trí màn hình
+// Toàn bộ comment bằng tiếng Việt để dễ bảo trì nội bộ
+// ================================================================
+
 // Import kiểu RefObject từ React để tham chiếu tới WebView
 import type {RefObject} from 'react';
 // Import kiểu WebView từ thư viện react-native-webview để tương tác với nội dung web
@@ -13,7 +21,12 @@ function sanitize(cmd: string): string {
   return trimmed.endsWith(';') ? trimmed : trimmed + ';';
 }
 
-// Gửi lệnh krpano vào WebView
+/**
+ * Gửi chuỗi lệnh krpano (k.call("...")) vào WebView an toàn.
+ * - Tự động chuẩn hoá lệnh và bọc try/catch để tránh crash.
+ * @param webRef Tham chiếu WebView đang chứa krpano
+ * @param cmd Chuỗi lệnh krpano (các set/copy/call...) nối bằng dấu chấm phẩy
+ */
 export function sendKrpano(webRef: RefObject<WebView>, cmd: string): void {
   // Nếu chưa có tham chiếu WebView thì bỏ qua
   if (!webRef?.current) {
@@ -35,7 +48,13 @@ export function sendKrpano(webRef: RefObject<WebView>, cmd: string): void {
   }
 }
 
-// Gửi danh sách điểm (ath/atv) của một hotspot về React Native thông qua postMessage
+/**
+ * Yêu cầu krpano gửi về danh sách điểm (ath/atv) của một hotspot polyline.
+ * - Dữ liệu trả về qua window.ReactNativeWebView.postMessage(JSON)
+ * @param webRef WebView ref
+ * @param hotspotName Tên hotspot (stroke) cần lấy các điểm
+ * @param messageType Chuỗi type để phân biệt case xử lý ở RN (ví dụ 'stroke_points_update')
+ */
 export function postHotspotPoints(
   webRef: RefObject<WebView>,
   hotspotName: string,
@@ -54,7 +73,13 @@ export function postHotspotPoints(
   }
 }
 
-// Post basic props of a non-polyline hotspot (ath, atv, width, height)
+/**
+ * Yêu cầu krpano gửi về thuộc tính cơ bản của một hotspot không phải polyline
+ * (ath, atv, width, height) – dùng cho circle/SVG preview.
+ * @param webRef WebView ref
+ * @param hotspotName Tên hotspot
+ * @param messageType Chuỗi type để phân biệt khi nhận message ở RN
+ */
 export function postHotspotProps(
   webRef: RefObject<WebView>,
   hotspotName: string,
@@ -73,7 +98,17 @@ export function postHotspotProps(
   }
 }
 
-// Hit-test: chọn hotspot (stroke) gần vị trí màn hình (x,y) nhất trong bán kính cho trước
+/**
+ * Hit-test các stroke (polyline) theo tọa độ màn hình.
+ * - Tính khoảng cách ngắn nhất từ điểm (x,y) đến các đoạn của mỗi stroke.
+ * - Trả về tên stroke gần nhất trong bán kính cho trước qua postMessage.
+ * @param webRef WebView ref
+ * @param strokeNames Danh sách tên stroke cần kiểm tra
+ * @param x Tọa độ X màn hình
+ * @param y Tọa độ Y màn hình
+ * @param radiusPx Bán kính chọn (px)
+ * @param messageType Type trả về (ví dụ 'hit_stroke' hoặc 'select_stroke_for_scale')
+ */
 export function hitTestStrokes(
   webRef: RefObject<WebView>,
   strokeNames: string[],
@@ -104,7 +139,11 @@ if(window&&window.ReactNativeWebView&&window.ReactNativeWebView.postMessage){win
   }
 }
 
-// Hit-test circles by distance to center in screen space with tolerance radiusPx
+/**
+ * Hit-test circle theo khoảng cách biên trong không gian màn hình.
+ * - Tính chênh lệch giữa khoảng cách đến tâm và bán kính (từ width/height).
+ * - Trả về tên circle phù hợp trong bán kính dung sai.
+ */
 export function hitTestCircles(
   webRef: RefObject<WebView>,
   circleNames: string[],
@@ -117,7 +156,11 @@ export function hitTestCircles(
     return;
   }
   const namesJson = JSON.stringify(circleNames.map(n => String(n)));
-  const js = `try{var getK=function(){try{return document.getElementById('krpanoSWFObject')||window.krpano||window.krpanoJS||window.krpanoInterface||(window.get&&window.get('global')&&window.get('global').krpano)}catch(e){return null}};var k=getK();if(!k){throw new Error('krpano not ready')}var names=${namesJson};var rx=${Number(radiusPx)||20};var px=${Number(x)||0},py=${Number(y)||0};var best=null;var bestd=1e15;for(var i=0;i<names.length;i++){var n=names[i];try{if(!k.get("hotspot['"+n+"']")){continue}var w=Number(k.get("hotspot['"+n+"'].width"));var h=Number(k.get("hotspot['"+n+"'].height"));var cx=Number(k.get("hotspot['"+n+"'].ath"));var cy=Number(k.get("hotspot['"+n+"'].atv"));k.call('spheretoscreen('+cx+','+cy+',__cx,__cy)');var sx=Number(k.get('__cx'));var sy=Number(k.get('__cy'));var r=isFinite(w)?w/2:16;var dx=px-sx, dy=py-sy;var ed=Math.abs(Math.sqrt(dx*dx+dy*dy)-r); if(ed<bestd){bestd=ed;best=n}}catch(e){}}var name=(bestd<=rx)?best:null; if(window&&window.ReactNativeWebView&&window.ReactNativeWebView.postMessage){window.ReactNativeWebView.postMessage(JSON.stringify({type:'${messageType}', name:name, distance:bestd}))}}catch(e){}; true;`;
+  const js = `try{var getK=function(){try{return document.getElementById('krpanoSWFObject')||window.krpano||window.krpanoJS||window.krpanoInterface||(window.get&&window.get('global')&&window.get('global').krpano)}catch(e){return null}};var k=getK();if(!k){throw new Error('krpano not ready')}var names=${namesJson};var rx=${
+    Number(radiusPx) || 20
+  };var px=${Number(x) || 0},py=${
+    Number(y) || 0
+  };var best=null;var bestd=1e15;for(var i=0;i<names.length;i++){var n=names[i];try{if(!k.get("hotspot['"+n+"']")){continue}var w=Number(k.get("hotspot['"+n+"'].width"));var h=Number(k.get("hotspot['"+n+"'].height"));var cx=Number(k.get("hotspot['"+n+"'].ath"));var cy=Number(k.get("hotspot['"+n+"'].atv"));k.call('spheretoscreen('+cx+','+cy+',__cx,__cy)');var sx=Number(k.get('__cx'));var sy=Number(k.get('__cy'));var r=isFinite(w)?w/2:16;var dx=px-sx, dy=py-sy;var ed=Math.abs(Math.sqrt(dx*dx+dy*dy)-r); if(ed<bestd){bestd=ed;best=n}}catch(e){}}var name=(bestd<=rx)?best:null; if(window&&window.ReactNativeWebView&&window.ReactNativeWebView.postMessage){window.ReactNativeWebView.postMessage(JSON.stringify({type:'${messageType}', name:name, distance:bestd}))}}catch(e){}; true;`;
   try {
     webRef.current.injectJavaScript(js);
   } catch (_) {
@@ -125,7 +168,10 @@ export function hitTestCircles(
   }
 }
 
-// Post hotspot points with a small delay to avoid racing hotspot creation
+/**
+ * Gửi yêu cầu post điểm (ath/atv) sau một khoảng delay nhỏ.
+ * - Tránh race condition khi hotspot vừa được tạo.
+ */
 export function postHotspotPointsDelayed(
   webRef: RefObject<WebView>,
   hotspotName: string,
