@@ -105,23 +105,39 @@ export function tapPoint(webRef: RefObject<WebView>, x: number, y: number) {
 // Xóa điểm cuối cùng (undo) - hoàn tác thao tác vẽ điểm cuối
 export function undoPoint(webRef: RefObject<WebView>) {
   const cmds = [
+    // Kiểm tra nếu có điểm nào để xóa
     'if(global.painter_idx GT 0, ',
+    // Debug: hiển thị thông tin về điểm sẽ xóa
+    "  trace('Undo point: current index =', global.painter_idx, 'will remove dot', global.painter_idx - 1); ",
+    // Xóa đoạn nối giữa điểm hiện tại và điểm trước đó (nếu có)
+    '  if(global.painter_idx GT 1, ',
+    "    trace('Removing line between dots', global.painter_idx - 2, 'and', global.painter_idx - 1); ",
+    "    removehotspot(calc('painter_pair_' + (global.painter_idx - 2))); ",
+    '  ); ',
+    // Xóa điểm cuối cùng - sử dụng cú pháp trực tiếp và đảm bảo xóa đúng điểm
+    "  set(dot_to_remove, calc('rn_dot_' + (global.painter_idx - 1))); ",
+    "  trace('Will remove dot:', get(dot_to_remove)); ",
+    "  set(hotspot[get(dot_to_remove)].visible, true); ", // Đảm bảo điểm hiển thị trước khi xóa
+    "  removehotspot(get(dot_to_remove)); ",
+    // Giảm chỉ số điểm sau khi đã xóa
     '  dec(global.painter_idx); ',
-    "  removehotspot('rn_dot_' + global.painter_idx); ",
-    // Xóa đoạn nối cuối cùng nếu tồn tại
-    "  if(hotspot[calc('painter_pair_' + global.painter_idx)], removehotspot(calc('painter_pair_' + global.painter_idx)); ); ",
     // Nếu có đa giác, xóa nó và hiện lại các nút tròn
     "  if(hotspot['painter_shape'], ",
+    "    trace('Removing polygon and showing remaining dots'); ",
     "    removehotspot('painter_shape'); ",
-    '    for(set(k,0), k LT global.painter_idx, inc(k), ',
-    "      if(hotspot[calc('rn_dot_' + get(k))], set(hotspot[calc('rn_dot_' + get(k))].visible, true); ); ",
-    '    ); ',
-    '    for(set(m,0), m LT calc(global.painter_idx - 1), inc(m), ',
-    "      if(hotspot[calc('painter_pair_' + get(m))], set(hotspot[calc('painter_pair_' + get(m))].visible, true); ); ",
-    '    ); ',
+    '  ); ',
+    // Đảm bảo tất cả các điểm còn lại đều hiển thị
+    '  for(set(k,0), k LT global.painter_idx, inc(k), ',
+    "    trace('Making dot visible:', 'rn_dot_' + get(k)); ",
+    "    if(hotspot[calc('rn_dot_' + get(k))], set(hotspot[calc('rn_dot_' + get(k))].visible, true); ); ",
+    '  ); ',
+    // Đảm bảo tất cả các đoạn nối còn lại đều hiển thị
+    '  for(set(m,0), m LT calc(global.painter_idx - 1), inc(m), ',
+    "    trace('Making line visible:', 'painter_pair_' + get(m)); ",
+    "    if(hotspot[calc('painter_pair_' + get(m))], set(hotspot[calc('painter_pair_' + get(m))].visible, true); ); ",
     '  ); ',
     ')',
-  ].join('');
+  ].join(' '); // Sửa lại join('') thành join(' ') để đảm bảo các lệnh được nối với khoảng trắng
   sendKrpano(webRef, cmds);
 }
 
