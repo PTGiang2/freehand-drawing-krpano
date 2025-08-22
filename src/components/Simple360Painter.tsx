@@ -20,10 +20,12 @@ import RNFS from 'react-native-fs';
 import {
   tapPoint, // Tạo điểm mới khi tap
   undoPoint, // Hoàn tác điểm cuối cùng
+  redoPoint, // Khôi phục điểm đã bị xóa
   clearPoint, // Xóa tất cả điểm
   movePoint, // Di chuyển tất cả điểm
   setPointSelected, // Làm nổi bật/bỏ nổi bật shape điểm
 } from './drawing/PointMode';
+import {sendKrpano} from './drawing/KrpanoBridge';
 
 // Import các hàm xử lý vẽ tự do từ module FreehandMode
 import {
@@ -167,6 +169,8 @@ export const Simple360Painter: React.FC = () => {
   const [circleUndoHistory, setCircleUndoHistory] = useState<
     {name: string; ath: number; atv: number; diameter: number}[]
   >([]);
+  // Lịch sử redo cho point mode - lưu tọa độ các điểm bị xóa
+  const [pointUndoHistory, setPointUndoHistory] = useState<{ath: number; atv: number}[]>([]);
 
   // Global timeout để tránh app bị đứng yên (chỉ khi thực sự cần thiết)
   React.useEffect(() => {
@@ -948,6 +952,30 @@ export const Simple360Painter: React.FC = () => {
     if (freeHandMode) {
       undoFreehand(webRef);
     } else {
+      // Lưu tọa độ điểm sẽ bị xóa trước khi undo
+      const getPointCoordinates = () => {
+        const js = `
+          try {
+            var k = document.getElementById('krpanoSWFObject') || window.krpano;
+            if (k && k.get && k.get('global.painter_idx') > 0) {
+              var idx = k.get('global.painter_idx') - 1;
+              var dotName = 'rn_dot_' + idx;
+              var ath = k.get("hotspot['" + dotName + "'].ath");
+              var atv = k.get("hotspot['" + dotName + "'].atv");
+              if (ath && atv) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                  type: 'point_coordinates',
+                  ath: Number(ath),
+                  atv: Number(atv)
+                }));
+              }
+            }
+          } catch(e) {}
+        `;
+        webRef.current?.injectJavaScript(js);
+      };
+      
+      getPointCoordinates();
       undoPoint(webRef);
     }
   };
@@ -1051,6 +1079,16 @@ export const Simple360Painter: React.FC = () => {
       return;
     }
 
+    // Nếu đang ở chế độ vẽ điểm, thử redo điểm
+    if (drawMode && pointUndoHistory.length > 0) {
+      console.log('Trying to redo point, drawMode:', drawMode, 'pointUndoHistory length:', pointUndoHistory.length);
+      const lastPoint = pointUndoHistory[pointUndoHistory.length - 1];
+      redoPoint(webRef, lastPoint.ath, lastPoint.atv);
+      // Xóa điểm đã redo khỏi lịch sử
+      setPointUndoHistory(prev => prev.slice(0, -1));
+      return;
+    }
+
     console.log('Không có gì để redo');
   };
 
@@ -1118,6 +1156,8 @@ export const Simple360Painter: React.FC = () => {
     // KHÔNG reset lịch sử undo khi xóa toàn bộ - để có thể redo
     // Reset lịch sử vị trí khi xóa toàn bộ
     setPositionHistory([]);
+    // Reset point undo history khi clear
+    setPointUndoHistory([]);
     await AsyncStorage.removeItem('freehand_strokes').catch(() => {});
     await AsyncStorage.removeItem('circles').catch(() => {});
   };
@@ -1344,7 +1384,17 @@ export const Simple360Painter: React.FC = () => {
         // Lắng nghe message trả về từ WebView (danh sách điểm đã vẽ)
         onMessage={async evt => {
           try {
+            // Debug: log all messages from WebView
+            console.log('WebView message received:', evt.nativeEvent.data);
+            
             const data = JSON.parse(evt.nativeEvent.data);
+            
+            // Xử lý message lưu tọa độ điểm cho redo
+            if (data && data.type === 'point_coordinates') {
+              console.log('Received point coordinates for undo:', data.ath, data.atv);
+              setPointUndoHistory(prev => [...prev, {ath: data.ath, atv: data.atv}]);
+              return;
+            }
             if (
               data &&
               data.type === 'freehand_points' &&
@@ -1816,7 +1866,8 @@ export const Simple360Painter: React.FC = () => {
               positionHistory.length > 0 ||
               undoHistory.length > 0 ||
               circlePositionHistory.length > 0 ||
-              circleUndoHistory.length > 0
+              circleUndoHistory.length > 0 ||
+              pointUndoHistory.length > 0
                 ? styles.redo
                 : styles.redoDisabled,
             ]}
@@ -1825,7 +1876,8 @@ export const Simple360Painter: React.FC = () => {
               positionHistory.length === 0 &&
               undoHistory.length === 0 &&
               circlePositionHistory.length === 0 &&
-              circleUndoHistory.length === 0
+              circleUndoHistory.length === 0 &&
+              pointUndoHistory.length === 0
             }>
             <Text style={styles.btnText}>↪️</Text>
           </TouchableOpacity>

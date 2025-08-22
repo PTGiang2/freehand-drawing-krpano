@@ -102,7 +102,7 @@ export function tapPoint(webRef: RefObject<WebView>, x: number, y: number) {
   sendKrpano(webRef, cmds);
 }
 
-// Xóa điểm cuối cùng (undo) - hoàn tác thao tác vẽ điểm cuối
+// Xóa điểm cuối cùng (undo) - chỉ xóa điểm, không lưu vào krpano
 export function undoPoint(webRef: RefObject<WebView>) {
   const cmds = [
     // Kiểm tra nếu có điểm nào để xóa
@@ -136,8 +136,43 @@ export function undoPoint(webRef: RefObject<WebView>) {
     "    trace('Making line visible:', 'painter_pair_' + get(m)); ",
     "    if(hotspot[calc('painter_pair_' + get(m))], set(hotspot[calc('painter_pair_' + get(m))].visible, true); ); ",
     '  ); ',
-    ')',
+    ')'
   ].join(' '); // Sửa lại join('') thành join(' ') để đảm bảo các lệnh được nối với khoảng trắng
+  sendKrpano(webRef, cmds);
+}
+
+// Khôi phục điểm - sử dụng tọa độ từ React Native state
+export function redoPoint(webRef: RefObject<WebView>, ath: number, atv: number) {
+  console.log('redoPoint called with coordinates:', ath, atv);
+  
+  const cmds = [
+    "trace('REDO POINT FUNCTION CALLED');",
+    "addhotspot(calc('rn_dot_' + global.painter_idx));",
+    "set(hotspot[calc('rn_dot_' + global.painter_idx)].renderer, webgl);",
+    "set(hotspot[calc('rn_dot_' + global.painter_idx)].zorder, 100000);",
+    '  set(hotspot[calc(\'rn_dot_\' + global.painter_idx)].url, \'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="12" fill="%23FF3B30" stroke="white" stroke-width="2"/></svg>\');',
+    `set(hotspot[calc('rn_dot_' + global.painter_idx)].ath, ${ath});`,
+    `set(hotspot[calc('rn_dot_' + global.painter_idx)].atv, ${atv});`,
+    "if(hotspot['painter_shape'], removehotspot('painter_shape'); );",
+    'inc(global.painter_idx);',
+    'if(global.painter_idx GE 2,',
+    '  set(i2, calc(global.painter_idx - 1));',
+    '  set(i1, calc(i2 - 1));',
+    "  addhotspot(calc('painter_pair_' + i1));",
+    "  set(hotspot[calc('painter_pair_' + i1)].renderer, webgl);",
+    "  set(hotspot[calc('painter_pair_' + i1)].polyline, true);",
+    "  set(hotspot[calc('painter_pair_' + i1)].closepath, false);",
+    "  set(hotspot[calc('painter_pair_' + i1)].fillalpha,0);",
+    "  set(hotspot[calc('painter_pair_' + i1)].borderwidth,3);",
+    "  set(hotspot[calc('painter_pair_' + i1)].bordercolor,0xFF3B30);",
+    "  set(hotspot[calc('painter_pair_' + i1)].zorder, 99999);",
+    "  copy(hotspot[calc('painter_pair_' + i1)].point[0].ath, hotspot[calc('rn_dot_' + i1)].ath);",
+    "  copy(hotspot[calc('painter_pair_' + i1)].point[0].atv, hotspot[calc('rn_dot_' + i1)].atv);",
+    "  copy(hotspot[calc('painter_pair_' + i1)].point[1].ath, hotspot[calc('rn_dot_' + i2)].ath);",
+    "  copy(hotspot[calc('painter_pair_' + i1)].point[1].atv, hotspot[calc('rn_dot_' + i2)].atv);",
+    ');',
+    "trace('REDO POINT COMPLETED');"
+  ].join(' ');
   sendKrpano(webRef, cmds);
 }
 
@@ -151,6 +186,9 @@ export function clearPoint(webRef: RefObject<WebView>) {
     // Xóa tất cả các chấm
     "if(global.painter_idx, for(set(i,0), i LT global.painter_idx, inc(i), if(hotspot['rn_dot_' + get(i)], removehotspot('rn_dot_' + get(i)); ); ); ); ",
     'set(global.painter_idx, 0);',
+    // Xóa redo variables
+    'set(global.point_redo_ath, "");',
+    'set(global.point_redo_atv, "");',
   ].join(' ');
   sendKrpano(webRef, cmds);
 }
