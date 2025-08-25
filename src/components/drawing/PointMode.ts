@@ -6,7 +6,7 @@ import type {WebView} from 'react-native-webview';
 import {sendKrpano} from './KrpanoBridge';
 
 // Tạo một điểm mới khi người dùng tap vào màn hình
-export function tapPoint(webRef: RefObject<WebView>, x: number, y: number) {
+export function tapPoint(webRef: RefObject<WebView>, x: number, y: number, color: string = '0xFF3B30') {
   // Tạo mảng chứa các lệnh krpano để tạo điểm mới
   const cmds = [
     // Chuyển đổi tọa độ màn hình (x,y) sang tọa độ cầu (da,dv) trong krpano
@@ -64,7 +64,7 @@ export function tapPoint(webRef: RefObject<WebView>, x: number, y: number) {
     "    set(hotspot['painter_shape'].polyline, true); ",
     "    set(hotspot['painter_shape'].closepath, true); ",
     "    set(hotspot['painter_shape'].fillalpha, 0.1); ",
-    "    set(hotspot['painter_shape'].bordercolor, 0xFF3B30); ",
+    `    set(hotspot['painter_shape'].bordercolor, ${color}); `,
     "    set(hotspot['painter_shape'].borderwidth, 3); ",
     "    set(hotspot['painter_shape'].zorder, 99998); ",
     // Thêm tất cả điểm vào đa giác (bao gồm cả điểm đóng)
@@ -90,7 +90,7 @@ export function tapPoint(webRef: RefObject<WebView>, x: number, y: number) {
     "  set(hotspot[calc('painter_pair_' + i1)].closepath, false);",
     "  set(hotspot[calc('painter_pair_' + i1)].fillalpha,0);",
     "  set(hotspot[calc('painter_pair_' + i1)].borderwidth,3);",
-    "  set(hotspot[calc('painter_pair_' + i1)].bordercolor,0xFF3B30);",
+    `  set(hotspot[calc('painter_pair_' + i1)].bordercolor,${color});`,
     "  set(hotspot[calc('painter_pair_' + i1)].zorder, 99999);",
     "  copy(hotspot[calc('painter_pair_' + i1)].point[0].ath, hotspot[calc('rn_dot_' + i1)].ath); ",
     "  copy(hotspot[calc('painter_pair_' + i1)].point[0].atv, hotspot[calc('rn_dot_' + i1)].atv); ",

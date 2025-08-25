@@ -164,54 +164,14 @@ export function parseSvgPathToPoints(d: string): Pt[] {
     }
   } catch (error) {
     console.error('Lỗi khi parse SVG path:', error);
-
-    // Fallback đặc biệt cho hình trái tim
-    if (d.includes('C') && d.includes('50 15')) {
-      console.log('Sử dụng fallback đặc biệt cho hình trái tim');
-      return [
-        {x: 50, y: 15}, // Đỉnh trái tim
-        {x: 35, y: 5}, // Điểm cong trái trên
-        {x: 20, y: 15}, // Điểm cong trái
-        {x: 5, y: 25}, // Điểm cong trái dưới
-        {x: 20, y: 55}, // Điểm cong trái dưới
-        {x: 35, y: 65}, // Điểm cong trái dưới
-        {x: 50, y: 85}, // Điểm dưới cùng
-        {x: 65, y: 65}, // Điểm cong phải dưới
-        {x: 80, y: 55}, // Điểm cong phải dưới
-        {x: 95, y: 25}, // Điểm cong phải dưới
-        {x: 80, y: 15}, // Điểm cong phải
-        {x: 65, y: 5}, // Điểm cong phải trên
-        {x: 50, y: 15}, // Về đỉnh trái tim
-      ];
-    }
-
-    // Fallback chung: tạo một hình chữ nhật đơn giản
-    return [
-      {x: 0, y: 0},
-      {x: 100, y: 0},
-      {x: 100, y: 100},
-      {x: 0, y: 100},
-      {x: 0, y: 0},
-    ];
-  }
-
-  // Đảm bảo có ít nhất 3 điểm để tạo polyline
-  if (pts.length < 3) {
-    console.warn('SVG path có ít điểm quá, sử dụng fallback');
-    return [
-      {x: 0, y: 0},
-      {x: 100, y: 0},
-      {x: 100, y: 100},
-      {x: 0, y: 100},
-      {x: 0, y: 0},
-    ];
+    return pts;
   }
 
   return pts;
 }
 
 /** Bắt đầu preview một shape SVG tạm tại vị trí x,y (màn hình). */
-export function startSvgShape(
+function startSvgShape(
   webRef: RefObject<WebView>,
   x: number,
   y: number,
@@ -236,7 +196,7 @@ export function startSvgShape(
 }
 
 /** Cập nhật kích thước preview shape SVG tạm theo đường kính px. */
-export function resizeSvgShape(
+function resizeSvgShape(
   webRef: RefObject<WebView>,
   viewBox: ViewBox,
   pathD: string,
@@ -258,12 +218,13 @@ export function resizeSvgShape(
  * Chuyển preview shape SVG tạm thành hotspot polyline cố định.
  * - Parse d -> points, map về sphere theo viewBox và đường kính thực tế.
  */
-export function finalizeSvgPathShape(
+function finalizeSvgPathShape(
   webRef: RefObject<WebView>,
   name: string,
   viewBox: ViewBox,
   pathD: string,
   tempName: string = 'shape_temp',
+  color: string = '0xFF3B30',
 ) {
   try {
     console.log(
@@ -273,6 +234,12 @@ export function finalizeSvgPathShape(
 
     const safe = name.replace(/[^a-zA-Z0-9_\-]/g, '_');
     const pts = parseSvgPathToPoints(pathD);
+
+    // Kiểm tra pts có tồn tại và có đủ điểm không
+    if (!pts || !Array.isArray(pts)) {
+      console.error(`Không thể parse SVG path: ${pathD}`);
+      return;
+    }
 
     console.log(`Parsed ${pts.length} points:`, pts);
 
@@ -306,7 +273,7 @@ export function finalizeSvgPathShape(
       `  set(hotspot['${safe}'].closepath, true);`,
       `  set(hotspot['${safe}'].fillalpha, 0);`,
       `  set(hotspot['${safe}'].borderwidth, 3);`,
-      `  set(hotspot['${safe}'].bordercolor, 0xFF3B30);`,
+      `  set(hotspot['${safe}'].bordercolor, ${color});`,
       `  set(hotspot['${safe}'].zorder, 99998);`,
       `  set(hotspot['${safe}'].visible, true);`,
       '  spheretoscreen(get(__ca), get(__cv), __sx, __sy);',
@@ -337,7 +304,7 @@ export function finalizeSvgPathShape(
       `  set(hotspot['${safe}'].closepath, true);`,
       `  set(hotspot['${safe}'].fillalpha, 0);`,
       `  set(hotspot['${safe}'].borderwidth, 3);`,
-      `  set(hotspot['${safe}'].bordercolor, 0xFF3B30);`,
+      `  set(hotspot['${safe}'].bordercolor, ${color});`,
       `  set(hotspot['${safe}'].zorder, 99998);`,
       `  set(hotspot['${safe}'].visible, true);`,
       `  set(hotspot['${safe}'].point[0].ath, get(__ca)); set(hotspot['${safe}'].point[0].atv, get(__cv));`,
@@ -350,4 +317,40 @@ export function finalizeSvgPathShape(
 
     sendKrpano(webRef, fallbackCmds);
   }
+}
+
+// ===== WRAPPERS: ONLY pathD (assume normalized to 0..100 viewBox) =====
+
+const DEFAULT_VIEWBOX: ViewBox = {width: 100, height: 100};
+
+/** Start a temporary SVG path hotspot at screen x,y using only pathD (normalized to 0..100). */
+export function startPathShape(
+  webRef: RefObject<WebView>,
+  x: number,
+  y: number,
+  pathD: string,
+  tempName: string = 'shape_temp',
+) {
+  startSvgShape(webRef, x, y, DEFAULT_VIEWBOX, pathD, tempName);
+}
+
+/** Resize a temporary SVG path hotspot using only pathD (normalized). */
+export function resizePathShape(
+  webRef: RefObject<WebView>,
+  pathD: string,
+  diameterPx: number,
+  tempName: string = 'shape_temp',
+) {
+  resizeSvgShape(webRef, DEFAULT_VIEWBOX, pathD, diameterPx, tempName);
+}
+
+/** Finalize a temporary SVG path hotspot into a polyline using only pathD (normalized). */
+export function finalizePathShape(
+  webRef: RefObject<WebView>,
+  name: string,
+  pathD: string,
+  tempName: string = 'shape_temp',
+  color: string = '0xFF3B30',
+) {
+  finalizeSvgPathShape(webRef, name, DEFAULT_VIEWBOX, pathD, tempName, color);
 }

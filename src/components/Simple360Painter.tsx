@@ -25,6 +25,9 @@ import {
   setPointSelected, // Làm nổi bật/bỏ nổi bật shape điểm
 } from './drawing/PointMode';
 
+// Import ColorPalette component
+import {ColorPalette} from './ColorPalette';
+
 // Import các hàm xử lý vẽ tự do từ module FreehandMode
 import {
   startFreehand, // Bắt đầu vẽ nét tự do mới
@@ -50,10 +53,8 @@ import {
   postHotspotProps,
   hitTestCircles,
 } from './drawing/KrpanoBridge';
+import {sendKrpano} from './drawing/KrpanoBridge';
 import {
-  startCircle,
-  resizeCircle,
-  finalizeCircle,
   renderCircle,
   removeCircle,
   moveCircle,
@@ -64,13 +65,17 @@ import {
   startArrow,
   resizeArrow,
   finalizeArrow,
-  startHeart,
-  resizeHeart,
-  finalizeHeart,
   startDiamond,
   resizeDiamond,
   finalizeDiamond,
+  CIRCLE_PATH_D,
+  HEART_PATH_D,
 } from './drawing/UnifiedShapeHotspot';
+import {
+  startPathShape,
+  resizePathShape,
+  finalizePathShape,
+} from './drawing/SvgShapeHotspot';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Component chính Simple360Painter - ứng dụng vẽ 360 độ
@@ -89,6 +94,26 @@ export const Simple360Painter: React.FC = () => {
     'circle' | 'star' | 'arrow' | 'heart' | 'diamond'
   >('circle');
 
+  // State cho bảng màu
+  const [showColorPalette, setShowColorPalette] = useState<boolean>(false);
+  const [selectedColor, setSelectedColor] = useState<string>('#FF6B35');
+
+  // Hàm chuyển đổi màu hex sang format krpano
+  const hexToKrpanoColor = (hex: string): string => {
+    // Loại bỏ # nếu có
+    const cleanHex = hex.replace('#', '');
+
+    // Chuyển đổi hex sang RGB
+    const r = parseInt(cleanHex.substr(0, 2), 16);
+    const g = parseInt(cleanHex.substr(2, 2), 16);
+    const b = parseInt(cleanHex.substr(4, 2), 16);
+
+    // Chuyển đổi sang format krpano (0xRRGGBB)
+    return `0x${r.toString(16).padStart(2, '0')}${g
+      .toString(16)
+      .padStart(2, '0')}${b.toString(16).padStart(2, '0')}`.toUpperCase();
+  };
+
   // Giới hạn kích thước và scale
   const MIN_CIRCLE_DIAMETER = 20; // px
   const MAX_CIRCLE_DIAMETER = 900; // px
@@ -104,21 +129,16 @@ export const Simple360Painter: React.FC = () => {
   // Bộ đếm sinh tên stroke duy nhất
   const strokeCounterRef = React.useRef<number>(0);
   // Danh sách các nét đã lưu
-  const [savedStrokes, setSavedStrokes] = useState<
-    {name: string; points: SpherePoint[]}[]
-  >([]);
+  type SavedStroke = {name: string; points: SpherePoint[]; color?: string};
+  const [savedStrokes, setSavedStrokes] = useState<SavedStroke[]>([]);
   // Danh sách circle đã lưu
   const [savedCircles, setSavedCircles] = useState<
     {name: string; ath: number; atv: number; diameter: number}[]
   >([]);
   // Lịch sử undo/redo để khôi phục các nét vẽ đã bị xóa
-  const [undoHistory, setUndoHistory] = useState<
-    {name: string; points: SpherePoint[]}[]
-  >([]);
+  const [undoHistory, setUndoHistory] = useState<SavedStroke[]>([]);
   // Lịch sử vị trí để khôi phục vị trí cũ khi redo
-  const [positionHistory, setPositionHistory] = useState<
-    {name: string; points: SpherePoint[]}[]
-  >([]);
+  const [positionHistory, setPositionHistory] = useState<SavedStroke[]>([]);
   // Lịch sử vị trí của circles
   const [circlePositionHistory, setCirclePositionHistory] = useState<
     {name: string; ath: number; atv: number; diameter: number}[]
@@ -218,7 +238,11 @@ export const Simple360Painter: React.FC = () => {
 
   const importStrokes = async () => {
     try {
-      let parsed: {name: string; points: SpherePoint[]}[] = [];
+      let parsed: {
+        color: string;
+        name: string;
+        points: SpherePoint[];
+      }[] = [];
       parsed = JSON.parse(importText);
       if (!Array.isArray(parsed)) {
         throw new Error('invalid');
@@ -233,7 +257,14 @@ export const Simple360Painter: React.FC = () => {
       ).catch(() => {});
       // Hydrate lên viewer nếu web sẵn sàng
       if (webReady) {
-        parsed.forEach(s => renderFreehandStroke(webRef, s.name, s.points));
+        parsed.forEach(s =>
+          renderFreehandStroke(
+            webRef,
+            s.name,
+            s.points,
+            s.color || hexToKrpanoColor(selectedColor),
+          ),
+        );
       }
       setImportModalVisible(false);
       setUndoHistory([]);
@@ -254,7 +285,7 @@ export const Simple360Painter: React.FC = () => {
     // Lấy tọa độ Y từ sự kiện touch và làm tròn về số nguyên
     const y = Math.round(e.nativeEvent.locationY);
     // Gọi hàm tạo điểm mới với tọa độ đã lấy được
-    tapPoint(webRef, x, y);
+    tapPoint(webRef, x, y, hexToKrpanoColor(selectedColor));
     // Reset lịch sử undo khi có điểm mới (vì đã có thay đổi mới)
     setUndoHistory([]);
     // Reset lịch sử vị trí khi có điểm mới
@@ -275,7 +306,7 @@ export const Simple360Painter: React.FC = () => {
     // Lấy tọa độ Y từ sự kiện touch và làm tròn về số nguyên
     const y = Math.round(e.nativeEvent.locationY);
     // Gọi hàm bắt đầu vẽ tự do với tọa độ đã lấy được
-    startFreehand(webRef, x, y);
+    startFreehand(webRef, x, y, hexToKrpanoColor(selectedColor));
   };
 
   // Hàm xử lý di chuyển trong khi vẽ tự do (kéo chuột)
@@ -303,7 +334,7 @@ export const Simple360Painter: React.FC = () => {
     const num = ++strokeCounterRef.current;
     const name = `freehand_${Date.now()}_${num}`;
     pendingStrokeNameRef.current = name;
-    finalizeFreehand(webRef, name);
+    finalizeFreehand(webRef, name, hexToKrpanoColor(selectedColor));
     // Dùng delay nhỏ để chắc chắn hotspot đã được tạo xong
     postHotspotPointsDelayed(webRef, name, 'freehand_points', 60);
   };
@@ -317,7 +348,7 @@ export const Simple360Painter: React.FC = () => {
     const x = Math.round(e.nativeEvent.locationX);
     const y = Math.round(e.nativeEvent.locationY);
     circleStartRef.current = {x, y};
-    startCircle(webRef, x, y);
+    startPathShape(webRef, x, y, CIRCLE_PATH_D, 'circle_temp');
   };
 
   const handleCircleMove = (e: any) => {
@@ -334,7 +365,7 @@ export const Simple360Painter: React.FC = () => {
     const dx = x - circleStartRef.current.x;
     const dy = y - circleStartRef.current.y;
     const diameter = Math.max(2, Math.round(Math.sqrt(dx * dx + dy * dy) * 2));
-    resizeCircle(webRef, diameter);
+    resizePathShape(webRef, CIRCLE_PATH_D, diameter, 'circle_temp');
   };
 
   const handleCircleEnd = () => {
@@ -345,7 +376,13 @@ export const Simple360Painter: React.FC = () => {
     const num = ++circleCounterRef.current;
     const name = `circle_${Date.now()}_${num}`;
     pendingCircleNameRef.current = name;
-    finalizeCircle(webRef, name);
+    finalizePathShape(
+      webRef,
+      name,
+      CIRCLE_PATH_D,
+      'circle_temp',
+      hexToKrpanoColor(selectedColor),
+    );
     // Convert the finalized circle hotspot into lon/lat polyline points and save like a stroke
     postHotspotPointsDelayed(webRef, name, 'freehand_points', 60);
     circleStartRef.current = null;
@@ -390,7 +427,7 @@ export const Simple360Painter: React.FC = () => {
     const num = ++starCounterRef.current;
     const name = `star_${Date.now()}_${num}`;
     pendingStarNameRef.current = name;
-    finalizeStar(webRef, name);
+    finalizeStar(webRef, name, hexToKrpanoColor(selectedColor));
     // Lưu như stroke bằng cách yêu cầu danh sách điểm (thêm delay tránh race)
     postHotspotPointsDelayed(webRef, name, 'freehand_points', 60);
     starStartRef.current = null;
@@ -435,7 +472,7 @@ export const Simple360Painter: React.FC = () => {
     const num = ++arrowCounterRef.current;
     const name = `arrow_${Date.now()}_${num}`;
     pendingArrowNameRef.current = name;
-    finalizeArrow(webRef, name);
+    finalizeArrow(webRef, name, hexToKrpanoColor(selectedColor));
     postHotspotPointsDelayed(webRef, name, 'freehand_points', 60);
     arrowStartRef.current = null;
     // Thoát chế độ vẽ để có thể xoay 360 ngay sau khi thả
@@ -451,7 +488,7 @@ export const Simple360Painter: React.FC = () => {
     const y = Math.round(e.nativeEvent.locationY);
     isDrawingHeartRef.current = true;
     heartStartRef.current = {x, y};
-    startHeart(webRef, x, y);
+    startPathShape(webRef, x, y, HEART_PATH_D, 'heart_temp');
   };
 
   const handleHeartMove = (e: any) => {
@@ -468,7 +505,7 @@ export const Simple360Painter: React.FC = () => {
     const dx = x - heartStartRef.current.x;
     const dy = y - heartStartRef.current.y;
     const diameter = Math.sqrt(dx * dx + dy * dy) * 2;
-    resizeHeart(webRef, diameter);
+    resizePathShape(webRef, HEART_PATH_D, diameter, 'heart_temp');
   };
 
   const handleHeartEnd = () => {
@@ -494,11 +531,16 @@ export const Simple360Painter: React.FC = () => {
 
       // Wrap finalizeHeart trong try-catch riêng
       try {
-        finalizeHeart(webRef, name);
+        finalizePathShape(
+          webRef,
+          name,
+          HEART_PATH_D,
+          'heart_temp',
+          hexToKrpanoColor(selectedColor),
+        );
         console.log('Heart finalized successfully');
       } catch (finalizeError) {
         console.error('Lỗi khi finalize heart:', finalizeError);
-        // Không cần throw error, tiếp tục xử lý
       }
 
       // Post hotspot points với timeout ngắn hơn
@@ -566,7 +608,7 @@ export const Simple360Painter: React.FC = () => {
       pendingDiamondNameRef.current = name;
 
       console.log('Finalizing diamond:', name);
-      finalizeDiamond(webRef, name);
+      finalizeDiamond(webRef, name, hexToKrpanoColor(selectedColor));
 
       // Thêm timeout để tránh app bị đứng yên
       setTimeout(() => {
@@ -823,7 +865,13 @@ export const Simple360Painter: React.FC = () => {
           'to width:',
           newWidth,
         );
-        resizeCircle(webRef, newWidth);
+        const cname = selectedCircleRef.current;
+        if (cname) {
+          sendKrpano(
+            webRef,
+            `if(hotspot['${cname}'], set(hotspot['${cname}'].width, ${newWidth}); set(hotspot['${cname}'].height, ${newWidth}); );`,
+          );
+        }
       } else if (selectedStrokeRef.current) {
         // Stroke: scale theo delta quãng kéo (kéo ra -> factor > 1, kéo vào -> factor < 1)
         const prev = prevDragDistanceRef.current;
@@ -966,7 +1014,12 @@ export const Simple360Painter: React.FC = () => {
       const nextPositionHistory = positionHistory.slice(0, -1);
 
       // Khôi phục vị trí cũ của stroke
-      renderFreehandStroke(webRef, lastPosition.name, lastPosition.points);
+      renderFreehandStroke(
+        webRef,
+        lastPosition.name,
+        lastPosition.points,
+        lastPosition.color || hexToKrpanoColor(selectedColor),
+      );
 
       // Cập nhật stroke trong danh sách đã lưu
       const nextStrokes = savedStrokes.map(s =>
@@ -1011,7 +1064,12 @@ export const Simple360Painter: React.FC = () => {
       console.log('Khôi phục stroke đã bị xóa');
       // Khôi phục tất cả stroke đã bị xóa
       undoHistory.forEach(stroke => {
-        renderFreehandStroke(webRef, stroke.name, stroke.points);
+        renderFreehandStroke(
+          webRef,
+          stroke.name,
+          stroke.points,
+          stroke.color || hexToKrpanoColor(selectedColor),
+        );
       });
 
       // Thêm tất cả stroke vào danh sách đã lưu
@@ -1263,9 +1321,14 @@ export const Simple360Painter: React.FC = () => {
       return;
     }
     savedStrokes.forEach(s => {
-      renderFreehandStroke(webRef, s.name, s.points);
+      renderFreehandStroke(
+        webRef,
+        s.name,
+        s.points,
+        s.color || hexToKrpanoColor(selectedColor),
+      );
     });
-  }, [webReady, savedStrokes]);
+  }, [webReady, savedStrokes, selectedColor]);
 
   React.useEffect(() => {
     if (!webReady) {
@@ -1356,7 +1419,14 @@ export const Simple360Painter: React.FC = () => {
                 `freehand_${Date.now()}`;
               const points: SpherePoint[] = data.points;
               setSavedStrokes(prev => {
-                const next = [...prev, {name: strokeName, points}];
+                const next = [
+                  ...prev,
+                  {
+                    name: strokeName,
+                    points,
+                    color: hexToKrpanoColor(selectedColor),
+                  },
+                ];
                 AsyncStorage.setItem(
                   'freehand_strokes',
                   JSON.stringify(next),
@@ -1809,7 +1879,6 @@ export const Simple360Painter: React.FC = () => {
           <TouchableOpacity style={[styles.btn, styles.undo]} onPress={undo}>
             <Text style={styles.btnText}>↩️</Text>
           </TouchableOpacity>
-          {/* Button làm lại (redo) */}
           <TouchableOpacity
             style={[
               styles.btn,
@@ -1861,6 +1930,15 @@ export const Simple360Painter: React.FC = () => {
         </View>
       )}
 
+      {/* Bảng màu ở bên phải */}
+      <View style={styles.colorPaletteRight}>
+        <TouchableOpacity
+          style={[styles.colorPaletteBtn, {backgroundColor: selectedColor}]}
+          onPress={() => setShowColorPalette(true)}>
+          <Text style={styles.colorPaletteText}>🎨</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Modal nhập strokes */}
       <Modal visible={importModalVisible} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
@@ -1894,6 +1972,14 @@ export const Simple360Painter: React.FC = () => {
           </View>
         </View>
       </Modal>
+
+      {/* Color Palette Modal */}
+      <ColorPalette
+        visible={showColorPalette}
+        onClose={() => setShowColorPalette(false)}
+        onColorSelect={setSelectedColor}
+        selectedColor={selectedColor}
+      />
     </View>
   );
 };
@@ -2018,4 +2104,45 @@ const styles = StyleSheet.create({
   modalCancel: {backgroundColor: 'rgba(60,60,67,0.85)'},
   modalOk: {backgroundColor: '#0A84FF'},
   modalBtnText: {color: '#fff', fontWeight: '700'},
+
+  // Styles cho bảng màu
+  colorPalette: {backgroundColor: 'rgba(255,107,53,0.95)'}, // Cam trong suốt
+  colorIndicator: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+
+  // Styles cho bảng màu bên phải
+  colorPaletteRight: {
+    position: 'absolute',
+    right: 20,
+    top: '50%',
+    transform: [{translateY: -28}],
+    zIndex: 25,
+  },
+  colorPaletteBtn: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 4},
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  colorPaletteText: {
+    fontSize: 26,
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
+    textShadowOffset: {width: 0, height: 1},
+    textShadowRadius: 2,
+  },
 });

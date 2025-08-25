@@ -26,6 +26,8 @@ export function startFreehand(
   x: number,
   // Tọa độ Y trên màn hình (đơn vị pixel)
   y: number,
+  // Màu sắc cho hotspot
+  color: string = '0xFF3B30',
 ) {
   // Tạo mảng chứa các lệnh krpano cần thực thi theo thứ tự
   const cmds = [
@@ -47,8 +49,8 @@ export function startFreehand(
     "set(hotspot['freehand_path'].fillalpha,0);",
     // Thiết lập độ dày viền là 3 pixel
     "set(hotspot['freehand_path'].borderwidth,3);",
-    // Thiết lập màu viền là đỏ (0xFF3B30) cho hotspot
-    "set(hotspot['freehand_path'].bordercolor,0xFF3B30);",
+    // Thiết lập màu viền cho hotspot
+    `set(hotspot['freehand_path'].bordercolor,${color});`,
     // Gán điểm đầu tiên với tọa độ cầu da (kinh độ) vừa tính được
     "set(hotspot['freehand_path'].point[0].ath, get(da));",
     // Gán điểm đầu tiên với tọa độ cầu dv (vĩ độ) vừa tính được
@@ -291,6 +293,7 @@ export function scaleStroke(
 export function finalizeFreehand(
   webRef: RefObject<WebView>,
   strokeName: string,
+  color: string = '0xFF3B30',
 ) {
   const safeName = strokeName.replace(/[^a-zA-Z0-9_\-]/g, '_');
   const cmds = [
@@ -302,7 +305,7 @@ export function finalizeFreehand(
     `  set(hotspot['${safeName}'].closepath, false);`,
     `  set(hotspot['${safeName}'].fillalpha, 0);`,
     `  set(hotspot['${safeName}'].borderwidth, 3);`,
-    `  set(hotspot['${safeName}'].bordercolor, 0xFF3B30);`,
+    `  set(hotspot['${safeName}'].bordercolor, ${color});`,
     `  set(hotspot['${safeName}'].zorder, 99998);`,
     // Sao chép toàn bộ điểm
     '  for(set(ii,0), ii LT global.freehand_idx, inc(ii), ',
@@ -326,6 +329,7 @@ export function renderFreehandStroke(
   webRef: RefObject<WebView>,
   strokeName: string,
   points: SpherePoint[],
+  color: string = '0xFF3B30',
 ) {
   if (!points || points.length === 0) {
     return;
@@ -338,7 +342,7 @@ export function renderFreehandStroke(
     `set(hotspot['${safeName}'].closepath, false);`,
     `set(hotspot['${safeName}'].fillalpha, 0);`,
     `set(hotspot['${safeName}'].borderwidth, 3);`,
-    `set(hotspot['${safeName}'].bordercolor, 0xFF3B30);`,
+    `set(hotspot['${safeName}'].bordercolor, ${color});`,
     `set(hotspot['${safeName}'].zorder, 99998);`,
     `set(hotspot['${safeName}'].userdata.point_count, ${points.length});`,
   ];
