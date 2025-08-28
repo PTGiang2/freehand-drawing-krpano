@@ -11,7 +11,10 @@ export function tapPoint(webRef: RefObject<WebView>, x: number, y: number) {
   const cmds = [
     // Chuyển đổi tọa độ màn hình (x,y) sang tọa độ cầu (da,dv) trong krpano
     `screentosphere(${x},${y},da,dv);`,
-    // Kiểm tra nếu biến global.painter_idx chưa tồn tại thì khởi tạo bằng 0
+    // Khởi tạo biến toàn cục cho đa giác nhiều hình độc lập
+    'if(!global.poly_counter, set(global.poly_counter,0));',
+    'if(!global.current_poly_id, set(global.current_poly_id, get(global.poly_counter)));',
+    // Chỉ số điểm trong hình hiện tại
     'if(!global.painter_idx, set(global.painter_idx,0));',
     // Kiểm tra xem có chấm tròn nào gần điểm tap không để snap vào
     'set(snap_distance, 20); ', // Ngưỡng khoảng cách để snap (đơn vị pixel)
@@ -21,13 +24,13 @@ export function tapPoint(webRef: RefObject<WebView>, x: number, y: number) {
     // Tìm chấm tròn gần nhất để snap vào (kiểm tra trên màn hình)
     'if(global.painter_idx GT 0, ',
     '  for(set(i,0), i LT global.painter_idx, inc(i), ',
-    "    if(hotspot[calc('rn_dot_' + get(i))], ",
-    "      spheretoscreen(hotspot[calc('rn_dot_' + get(i))].ath, hotspot[calc('rn_dot_' + get(i))].atv, dot_x, dot_y); ",
+    "    if(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i))], ",
+    "      spheretoscreen(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i))].ath, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i))].atv, dot_x, dot_y); ",
     `      set(dist_x, abs(get(dot_x) - ${x})); `,
     `      set(dist_y, abs(get(dot_y) - ${y})); `,
     '      if(get(dist_x) LT snap_distance AND get(dist_y) LT snap_distance, ',
-    "        set(snap_ath, hotspot[calc('rn_dot_' + get(i))].ath); ",
-    "        set(snap_atv, hotspot[calc('rn_dot_' + get(i))].atv); ",
+    "        set(snap_ath, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i))].ath); ",
+    "        set(snap_atv, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i))].atv); ",
     '        set(snapped, true); ',
     '        break; ',
     '      ); ',
@@ -35,19 +38,19 @@ export function tapPoint(webRef: RefObject<WebView>, x: number, y: number) {
     '  ); ',
     '); ',
     // Tạo hotspot mới với tên 'rn_dot_' + số thứ tự để hiển thị điểm
-    "addhotspot(calc('rn_dot_' + global.painter_idx));",
+    "addhotspot(calc('rn_dot_' + get(global.current_poly_id) + '_' + get(global.painter_idx)));",
     // Dùng renderer webgl để hiển thị ảnh SVG làm chấm tròn đỏ
-    "set(hotspot[calc('rn_dot_' + global.painter_idx)].renderer, webgl);",
+    "set(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(global.painter_idx))].renderer, webgl);",
     // Thiết lập thứ tự hiển thị cao (zorder) để điểm luôn ở trên đường nối
-    "set(hotspot[calc('rn_dot_' + global.painter_idx)].zorder, 100000);",
+    "set(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(global.painter_idx))].zorder, 100000);",
     // Thiết lập ảnh SVG dạng data URL cho chấm tròn đỏ lớn viền trắng
-    'set(hotspot[calc(\'rn_dot_\' + global.painter_idx)].url, \'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="12" fill="%23FF3B30" stroke="white" stroke-width="2"/></svg>\');',
+    'set(hotspot[calc(\'rn_dot_\' + get(global.current_poly_id) + "_" + get(global.painter_idx))].url, \'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="12" fill="%23FF3B30" stroke="white" stroke-width="2"/></svg>\');',
     // Gán tọa độ cầu ath (kinh độ) cho hotspot điểm - sử dụng tọa độ đã snap
-    "set(hotspot[calc('rn_dot_' + global.painter_idx)].ath, get(snap_ath));",
+    "set(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(global.painter_idx))].ath, get(snap_ath));",
     // Gán tọa độ cầu atv (vĩ độ) cho hotspot điểm - sử dụng tọa độ đã snap
-    "set(hotspot[calc('rn_dot_' + global.painter_idx)].atv, get(snap_atv));",
+    "set(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(global.painter_idx))].atv, get(snap_atv));",
     // Xóa bất kỳ polygon cũ nào nếu có (phòng trường hợp còn sót)
-    "if(hotspot['painter_shape'], removehotspot('painter_shape'); );",
+    "if(hotspot[calc('painter_shape_' + get(global.current_poly_id))], removehotspot(calc('painter_shape_' + get(global.current_poly_id))); );",
     // Tăng chỉ số điểm lên 1 để sẵn sàng cho điểm tiếp theo
     'inc(global.painter_idx);',
     // Kiểm tra nếu đây là điểm đầu tiên (rn_dot_0) để tạo đa giác
@@ -55,47 +58,69 @@ export function tapPoint(webRef: RefObject<WebView>, x: number, y: number) {
     '  set(i, calc(global.painter_idx - 1)); ',
     // Kiểm tra near bằng ngưỡng độ (đơn vị độ cầu)
     '  set(th, 1.0); ',
-    "  if(abs(hotspot[calc('rn_dot_' + i)].ath - hotspot['rn_dot_0'].ath) LT th AND abs(hotspot[calc('rn_dot_' + i)].atv - hotspot['rn_dot_0'].atv) LT th, ",
+    "  if(abs(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i))].ath - hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_0')].ath) LT th AND abs(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i))].atv - hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_0')].atv) LT th, ",
     // Debug: log khi tạo đa giác
     '    trace("Creating polygon with ", global.painter_idx, " points"); ',
     // Tạo đa giác đi qua tất cả các điểm
-    "    addhotspot('painter_shape'); ",
-    "    set(hotspot['painter_shape'].renderer, webgl); ",
-    "    set(hotspot['painter_shape'].polyline, true); ",
-    "    set(hotspot['painter_shape'].closepath, true); ",
-    "    set(hotspot['painter_shape'].fillalpha, 0.1); ",
-    "    set(hotspot['painter_shape'].bordercolor, 0xFF3B30); ",
-    "    set(hotspot['painter_shape'].borderwidth, 3); ",
-    "    set(hotspot['painter_shape'].zorder, 99998); ",
+    "    addhotspot(calc('painter_shape_' + get(global.current_poly_id))); ",
+    "    set(hotspot[calc('painter_shape_' + get(global.current_poly_id))].renderer, webgl); ",
+    "    set(hotspot[calc('painter_shape_' + get(global.current_poly_id))].polyline, true); ",
+    "    set(hotspot[calc('painter_shape_' + get(global.current_poly_id))].closepath, true); ",
+    "    set(hotspot[calc('painter_shape_' + get(global.current_poly_id))].fillalpha, 0.1); ",
+    "    set(hotspot[calc('painter_shape_' + get(global.current_poly_id))].bordercolor, 0xFF3B30); ",
+    "    set(hotspot[calc('painter_shape_' + get(global.current_poly_id))].borderwidth, 3); ",
+    "    set(hotspot[calc('painter_shape_' + get(global.current_poly_id))].zorder, 99998); ",
     // Thêm tất cả điểm vào đa giác (bao gồm cả điểm đóng)
     '    for(set(j,0), j LT global.painter_idx, inc(j), ',
-    "      set(hotspot['painter_shape'].point[get(j)].ath, hotspot[calc('rn_dot_' + get(j))].ath); ",
-    "      set(hotspot['painter_shape'].point[get(j)].atv, hotspot[calc('rn_dot_' + get(j))].atv); ",
+    "      set(hotspot[calc('painter_shape_' + get(global.current_poly_id))].point[get(j)].ath, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(j))].ath); ",
+    "      set(hotspot[calc('painter_shape_' + get(global.current_poly_id))].point[get(j)].atv, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(j))].atv); ",
     '    ); ',
     // Thêm điểm cuối trùng với điểm đầu để đóng kín
-    "    set(hotspot['painter_shape'].point[global.painter_idx].ath, hotspot['rn_dot_0'].ath); ",
-    "    set(hotspot['painter_shape'].point[global.painter_idx].atv, hotspot['rn_dot_0'].atv); ",
+    "    set(hotspot[calc('painter_shape_' + get(global.current_poly_id))].point[global.painter_idx].ath, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_0')].ath); ",
+    "    set(hotspot[calc('painter_shape_' + get(global.current_poly_id))].point[global.painter_idx].atv, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_0')].atv); ",
+    // Đảm bảo có đoạn nối hiển thị giữa điểm LIỀN TRƯỚC và điểm đầu (cạnh n-1→1).
+    // Khi nhấn vào điểm đầu để đóng hình, điểm mới (n-1) trùng điểm 0, vì vậy cần nối (n-2)→0.
+    "    set(prev_idx, calc(global.painter_idx - 2)); ",
+    "    if(prev_idx GE 0, ",
+    "      addhotspot(calc('painter_pair_' + get(global.current_poly_id) + '_' + get(prev_idx))); ",
+    "      set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(prev_idx))].renderer, webgl); ",
+    "      set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(prev_idx))].polyline, true); ",
+    "      set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(prev_idx))].closepath, false); ",
+    "      set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(prev_idx))].fillalpha, 0); ",
+    "      set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(prev_idx))].borderwidth, 3); ",
+    "      set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(prev_idx))].bordercolor, 0xFF3B30); ",
+    "      set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(prev_idx))].zorder, 99999); ",
+    "      copy(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(prev_idx))].point[0].ath, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(prev_idx))].ath); ",
+    "      copy(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(prev_idx))].point[0].atv, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(prev_idx))].atv); ",
+    "      copy(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(prev_idx))].point[1].ath, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_0')].ath); ",
+    "      copy(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(prev_idx))].point[1].atv, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_0')].atv); ",
+    "    ); ",
     // Ẩn tất cả các nút tròn
     '    for(set(k,0), k LT global.painter_idx, inc(k), ',
-    "      set(hotspot[calc('rn_dot_' + get(k))].visible, false); ",
+    "      set(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(k))].visible, false); ",
     '    ); ',
+    // Lưu metadata và reset để bắt đầu hình mới
+    "    set(hotspot[calc('painter_shape_' + get(global.current_poly_id))].userdata.point_count, get(global.painter_idx)); ",
+    '    inc(global.poly_counter); ',
+    '    set(global.current_poly_id, calc(global.poly_counter)); ',
+    '    set(global.painter_idx, 0); ',
     '  ); ',
     '); ',
     // Nếu đã có ít nhất 2 chấm, nối 2 chấm cuối bằng một polyline mới và giữ lại các đoạn trước đó
     'if(global.painter_idx GE 2, ',
     '  set(i2, calc(global.painter_idx - 1)); set(i1, calc(i2 - 1)); ',
-    "  addhotspot(calc('painter_pair_' + i1));",
-    "  set(hotspot[calc('painter_pair_' + i1)].renderer, webgl);",
-    "  set(hotspot[calc('painter_pair_' + i1)].polyline, true);",
-    "  set(hotspot[calc('painter_pair_' + i1)].closepath, false);",
-    "  set(hotspot[calc('painter_pair_' + i1)].fillalpha,0);",
-    "  set(hotspot[calc('painter_pair_' + i1)].borderwidth,3);",
-    "  set(hotspot[calc('painter_pair_' + i1)].bordercolor,0xFF3B30);",
-    "  set(hotspot[calc('painter_pair_' + i1)].zorder, 99999);",
-    "  copy(hotspot[calc('painter_pair_' + i1)].point[0].ath, hotspot[calc('rn_dot_' + i1)].ath); ",
-    "  copy(hotspot[calc('painter_pair_' + i1)].point[0].atv, hotspot[calc('rn_dot_' + i1)].atv); ",
-    "  copy(hotspot[calc('painter_pair_' + i1)].point[1].ath, hotspot[calc('rn_dot_' + i2)].ath); ",
-    "  copy(hotspot[calc('painter_pair_' + i1)].point[1].atv, hotspot[calc('rn_dot_' + i2)].atv); ",
+    "  addhotspot(calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1)));",
+    "  set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].renderer, webgl);",
+    "  set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].polyline, true);",
+    "  set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].closepath, false);",
+    "  set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].fillalpha,0);",
+    "  set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].borderwidth,3);",
+    "  set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].bordercolor,0xFF3B30);",
+    "  set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].zorder, 99999);",
+    "  copy(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].point[0].ath, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i1))].ath); ",
+    "  copy(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].point[0].atv, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i1))].atv); ",
+    "  copy(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].point[1].ath, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i2))].ath); ",
+    "  copy(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].point[1].atv, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i2))].atv); ",
     ');',
   ].join(' '); // Nối tất cả lệnh thành một chuỗi JavaScript duy nhất
   // Gửi chuỗi lệnh JavaScript vào krpano thông qua WebView
@@ -112,29 +137,29 @@ export function undoPoint(webRef: RefObject<WebView>) {
     // Xóa đoạn nối giữa điểm hiện tại và điểm trước đó (nếu có)
     '  if(global.painter_idx GT 1, ',
     "    trace('Removing line between dots', global.painter_idx - 2, 'and', global.painter_idx - 1); ",
-    "    removehotspot(calc('painter_pair_' + (global.painter_idx - 2))); ",
+    "    removehotspot(calc('painter_pair_' + get(global.current_poly_id) + '_' + (global.painter_idx - 2))); ",
     '  ); ',
     // Xóa điểm cuối cùng - sử dụng cú pháp trực tiếp và đảm bảo xóa đúng điểm
-    "  set(dot_to_remove, calc('rn_dot_' + (global.painter_idx - 1))); ",
+    "  set(dot_to_remove, calc('rn_dot_' + get(global.current_poly_id) + '_' + (global.painter_idx - 1))); ",
     "  trace('Will remove dot:', get(dot_to_remove)); ",
     "  set(hotspot[get(dot_to_remove)].visible, true); ", // Đảm bảo điểm hiển thị trước khi xóa
     "  removehotspot(get(dot_to_remove)); ",
     // Giảm chỉ số điểm sau khi đã xóa
     '  dec(global.painter_idx); ',
     // Nếu có đa giác, xóa nó và hiện lại các nút tròn
-    "  if(hotspot['painter_shape'], ",
+    "  if(hotspot[calc('painter_shape_' + get(global.current_poly_id))], ",
     "    trace('Removing polygon and showing remaining dots'); ",
-    "    removehotspot('painter_shape'); ",
+    "    removehotspot(calc('painter_shape_' + get(global.current_poly_id))); ",
     '  ); ',
     // Đảm bảo tất cả các điểm còn lại đều hiển thị
     '  for(set(k,0), k LT global.painter_idx, inc(k), ',
-    "    trace('Making dot visible:', 'rn_dot_' + get(k)); ",
-    "    if(hotspot[calc('rn_dot_' + get(k))], set(hotspot[calc('rn_dot_' + get(k))].visible, true); ); ",
+    "    trace('Making dot visible:', 'rn_dot_' + get(global.current_poly_id) + '_' + get(k)); ",
+    "    if(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(k))], set(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(k))].visible, true); ); ",
     '  ); ',
     // Đảm bảo tất cả các đoạn nối còn lại đều hiển thị
     '  for(set(m,0), m LT calc(global.painter_idx - 1), inc(m), ',
-    "    trace('Making line visible:', 'painter_pair_' + get(m)); ",
-    "    if(hotspot[calc('painter_pair_' + get(m))], set(hotspot[calc('painter_pair_' + get(m))].visible, true); ); ",
+    "    trace('Making line visible:', 'painter_pair_' + get(global.current_poly_id) + '_' + get(m)); ",
+    "    if(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(m))], set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(m))].visible, true); ); ",
     '  ); ',
     ')'
   ].join(' '); // Sửa lại join('') thành join(' ') để đảm bảo các lệnh được nối với khoảng trắng
@@ -147,29 +172,32 @@ export function redoPoint(webRef: RefObject<WebView>, ath: number, atv: number) 
   
   const cmds = [
     "trace('REDO POINT FUNCTION CALLED');",
-    "addhotspot(calc('rn_dot_' + global.painter_idx));",
-    "set(hotspot[calc('rn_dot_' + global.painter_idx)].renderer, webgl);",
-    "set(hotspot[calc('rn_dot_' + global.painter_idx)].zorder, 100000);",
-    '  set(hotspot[calc(\'rn_dot_\' + global.painter_idx)].url, \'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="12" fill="%23FF3B30" stroke="white" stroke-width="2"/></svg>\');',
-    `set(hotspot[calc('rn_dot_' + global.painter_idx)].ath, ${ath});`,
-    `set(hotspot[calc('rn_dot_' + global.painter_idx)].atv, ${atv});`,
-    "if(hotspot['painter_shape'], removehotspot('painter_shape'); );",
+    'if(!global.poly_counter, set(global.poly_counter,0));',
+    'if(!global.current_poly_id, set(global.current_poly_id, get(global.poly_counter)));',
+    'if(!global.painter_idx, set(global.painter_idx,0));',
+    "addhotspot(calc('rn_dot_' + get(global.current_poly_id) + '_' + get(global.painter_idx)));",
+    "set(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(global.painter_idx))].renderer, webgl);",
+    "set(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(global.painter_idx))].zorder, 100000);",
+    '  set(hotspot[calc(\'rn_dot_\' + get(global.current_poly_id) + "_" + get(global.painter_idx))].url, \'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="12" fill="%23FF3B30" stroke="white" stroke-width="2"/></svg>\');',
+    `set(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(global.painter_idx))].ath, ${ath});`,
+    `set(hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(global.painter_idx))].atv, ${atv});`,
+    "if(hotspot[calc('painter_shape_' + get(global.current_poly_id))], removehotspot(calc('painter_shape_' + get(global.current_poly_id))); );",
     'inc(global.painter_idx);',
     'if(global.painter_idx GE 2,',
     '  set(i2, calc(global.painter_idx - 1));',
     '  set(i1, calc(i2 - 1));',
-    "  addhotspot(calc('painter_pair_' + i1));",
-    "  set(hotspot[calc('painter_pair_' + i1)].renderer, webgl);",
-    "  set(hotspot[calc('painter_pair_' + i1)].polyline, true);",
-    "  set(hotspot[calc('painter_pair_' + i1)].closepath, false);",
-    "  set(hotspot[calc('painter_pair_' + i1)].fillalpha,0);",
-    "  set(hotspot[calc('painter_pair_' + i1)].borderwidth,3);",
-    "  set(hotspot[calc('painter_pair_' + i1)].bordercolor,0xFF3B30);",
-    "  set(hotspot[calc('painter_pair_' + i1)].zorder, 99999);",
-    "  copy(hotspot[calc('painter_pair_' + i1)].point[0].ath, hotspot[calc('rn_dot_' + i1)].ath);",
-    "  copy(hotspot[calc('painter_pair_' + i1)].point[0].atv, hotspot[calc('rn_dot_' + i1)].atv);",
-    "  copy(hotspot[calc('painter_pair_' + i1)].point[1].ath, hotspot[calc('rn_dot_' + i2)].ath);",
-    "  copy(hotspot[calc('painter_pair_' + i1)].point[1].atv, hotspot[calc('rn_dot_' + i2)].atv);",
+    "  addhotspot(calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1)));",
+    "  set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].renderer, webgl);",
+    "  set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].polyline, true);",
+    "  set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].closepath, false);",
+    "  set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].fillalpha,0);",
+    "  set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].borderwidth,3);",
+    "  set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].bordercolor,0xFF3B30);",
+    "  set(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].zorder, 99999);",
+    "  copy(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].point[0].ath, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i1))].ath);",
+    "  copy(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].point[0].atv, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i1))].atv);",
+    "  copy(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].point[1].ath, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i2))].ath);",
+    "  copy(hotspot[calc('painter_pair_' + get(global.current_poly_id) + '_' + get(i1))].point[1].atv, hotspot[calc('rn_dot_' + get(global.current_poly_id) + '_' + get(i2))].atv);",
     ');',
     "trace('REDO POINT COMPLETED');"
   ].join(' ');

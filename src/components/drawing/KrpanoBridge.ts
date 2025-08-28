@@ -191,3 +191,23 @@ export function postHotspotPointsDelayed(
     /* noop */
   }
 }
+
+/**
+ * Kiểm tra polygon vừa finalize (global.poly_last_final_name) và post danh sách điểm về RN.
+ * Sau khi gửi xong sẽ reset biến để tránh gửi lặp.
+ */
+export function postLastFinalizedPolygonPoints(
+  webRef: RefObject<WebView>,
+  messageType: string,
+): void {
+  if (!webRef?.current) {
+    return;
+  }
+  const safeType = String(messageType);
+  const js = `try{var getK=function(){try{return document.getElementById('krpanoSWFObject')||window.krpano||window.krpanoJS||window.krpanoInterface||(window.get&&window.get('global')&&window.get('global').krpano)}catch(e){return null}};var k=getK();if(!k){throw new Error('krpano not ready')}var nm=k.get('global.poly_last_final_name');if(!nm){return}var points=[];var i=0;for(;;){var ath=k.get("hotspot['"+nm+"'].point["+i+"].ath");var atv=k.get("hotspot['"+nm+"'].point["+i+"].atv");if(typeof ath==='undefined'||typeof atv==='undefined'||ath===null||atv===null){break}points.push({ath:Number(ath),atv:Number(atv)});i++}if(window&&window.ReactNativeWebView&&window.ReactNativeWebView.postMessage){window.ReactNativeWebView.postMessage(JSON.stringify({type:'${safeType}', name:String(nm), points:points}))}k.set('global.poly_last_final_name', null)}catch(e){}; true;`;
+  try {
+    webRef.current.injectJavaScript(js);
+  } catch (_) {
+    /* noop */
+  }
+}

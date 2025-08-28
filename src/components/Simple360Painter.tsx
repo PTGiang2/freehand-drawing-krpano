@@ -959,7 +959,8 @@ export const Simple360Painter: React.FC = () => {
             var k = document.getElementById('krpanoSWFObject') || window.krpano;
             if (k && k.get && k.get('global.painter_idx') > 0) {
               var idx = k.get('global.painter_idx') - 1;
-              var dotName = 'rn_dot_' + idx;
+              var pid = k.get('global.current_poly_id') || 0;
+              var dotName = 'rn_dot_' + pid + '_' + idx;
               var ath = k.get("hotspot['" + dotName + "'].ath");
               var atv = k.get("hotspot['" + dotName + "'].atv");
               if (ath && atv) {
