@@ -28,6 +28,8 @@ export function startFreehand(
   y: number,
   // Màu sắc cho hotspot
   color: string = '0xFF3B30',
+  // Độ dày viền mong muốn (pt) cho nét mới; nếu không truyền sẽ dùng global hoặc mặc định 3
+  widthPt?: number,
 ) {
   // Tạo mảng chứa các lệnh krpano cần thực thi theo thứ tự
   const cmds = [
@@ -47,8 +49,14 @@ export function startFreehand(
     "set(hotspot['freehand_path'].closepath, false);",
     // Không tô nền (fillalpha = 0) để chỉ hiển thị viền
     "set(hotspot['freehand_path'].fillalpha,0);",
-    // Thiết lập độ dày viền là 3 pixel
-    "set(hotspot['freehand_path'].borderwidth,3);",
+    // Thiết lập độ dày viền
+    widthPt !== undefined
+      ? `set(hotspot['freehand_path'].borderwidth, ${Number(widthPt)});`
+      : "set(hotspot['freehand_path'].borderwidth,3);",
+    // Nếu không truyền width, nhưng có cấu hình toàn cục thì ghi đè cho nét tạm thời
+    widthPt === undefined
+      ? 'if(global.freehand_borderwidth, set(hotspot[\'freehand_path\'].borderwidth, get(global.freehand_borderwidth)); );'
+      : '',
     // Thiết lập màu viền cho hotspot
     `set(hotspot['freehand_path'].bordercolor,${color});`,
     // Gán điểm đầu tiên với tọa độ cầu da (kinh độ) vừa tính được
@@ -304,7 +312,8 @@ export function finalizeFreehand(
     `  set(hotspot['${safeName}'].polyline, true);`,
     `  set(hotspot['${safeName}'].closepath, false);`,
     `  set(hotspot['${safeName}'].fillalpha, 0);`,
-    `  set(hotspot['${safeName}'].borderwidth, 3);`,
+    // Kế thừa độ dày từ nét tạm thời tại thời điểm finalize
+    `  copy(hotspot['${safeName}'].borderwidth, hotspot['freehand_path'].borderwidth);`,
     `  set(hotspot['${safeName}'].bordercolor, ${color});`,
     `  set(hotspot['${safeName}'].zorder, 99998);`,
     // Sao chép toàn bộ điểm
@@ -330,6 +339,7 @@ export function renderFreehandStroke(
   strokeName: string,
   points: SpherePoint[],
   color: string = '0xFF3B30',
+  widthPt?: number,
 ) {
   if (!points || points.length === 0) {
     return;
@@ -341,7 +351,10 @@ export function renderFreehandStroke(
     `set(hotspot['${safeName}'].polyline, true);`,
     `set(hotspot['${safeName}'].closepath, false);`,
     `set(hotspot['${safeName}'].fillalpha, 0);`,
-    `set(hotspot['${safeName}'].borderwidth, 3);`,
+    // Áp dụng độ dày theo metadata nếu có, mặc định 3
+    widthPt !== undefined
+      ? `set(hotspot['${safeName}'].borderwidth, ${Number(widthPt)});`
+      : `set(hotspot['${safeName}'].borderwidth, 3);`,
     `set(hotspot['${safeName}'].bordercolor, ${color});`,
     `set(hotspot['${safeName}'].zorder, 99998);`,
     `set(hotspot['${safeName}'].userdata.point_count, ${points.length});`,
@@ -353,4 +366,46 @@ export function renderFreehandStroke(
     )
     .join(' ');
   sendKrpano(webRef, [...base, pts].join(' '));
+}
+
+/**
+ * Thiết lập độ dày viền mặc định (pt) cho tất cả nét freehand mới tạo.
+ */
+export function setDefaultFreehandWidth(webRef: RefObject<WebView>, widthPt: number) {
+  const w = Math.max(0.25, Number(widthPt));
+  const cmds = [
+    `set(global.freehand_borderwidth, ${w});`,
+    // Áp dụng ngay cho nét tạm (nếu đang có)
+    "if(hotspot['freehand_path'], ",
+    `  set(hotspot['freehand_path'].borderwidth, ${w}); `,
+    ');',
+  ].join(' ');
+  sendKrpano(webRef, cmds);
+}
+
+/**
+ * Đặt độ dày viền (pt) cho freehand tạm thời hiện tại.
+ */
+export function setTemporaryFreehandWidth(webRef: RefObject<WebView>, widthPt: number) {
+  const w = Math.max(0.25, Number(widthPt));
+  const cmds = [
+    "if(hotspot['freehand_path'], ",
+    `  set(hotspot['freehand_path'].borderwidth, ${w}); `,
+    ');',
+  ].join(' ');
+  sendKrpano(webRef, cmds);
+}
+
+/**
+ * Đặt độ dày viền (pt) cho một stroke đã finalize theo tên.
+ */
+export function setStrokeWidth(webRef: RefObject<WebView>, strokeName: string, widthPt: number) {
+  const safeName = strokeName.replace(/[^a-zA-Z0-9_\-]/g, '_');
+  const w = Math.max(0.25, Number(widthPt));
+  const cmds = [
+    `if(hotspot['${safeName}'], `,
+    `  set(hotspot['${safeName}'].borderwidth, ${w}); `,
+    ');',
+  ].join(' ');
+  sendKrpano(webRef, cmds);
 }

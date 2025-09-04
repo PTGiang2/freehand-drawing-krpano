@@ -191,3 +191,120 @@ export function postHotspotPointsDelayed(
     /* noop */
   }
 }
+
+/**
+ * Xoá các hotspot ở gần một điểm màn hình (chế độ tẩy).
+ * - Dựng toạ độ màn hình từ (ath,atv) rồi đo khoảng cách 2D.
+ * - Xoá theo từng hotspot nhỏ (ví dụ: rn_dot_*, painter_pair_*),
+ *   đồng thời hỗ trợ cả stroke/circle đã lưu qua danh sách tên.
+ */
+export function eraseAtScreenPoint(
+  webRef: RefObject<WebView>,
+  x: number,
+  y: number,
+  radiusPx: number,
+  strokeNames: string[],
+  circleNames: string[],
+): void {
+  if (!webRef?.current) {
+    return;
+  }
+  const namesJson = JSON.stringify((strokeNames || []).map(n => String(n)));
+  const circlesJson = JSON.stringify((circleNames || []).map(n => String(n)));
+  const js = `try{var getK=function(){try{return document.getElementById('krpanoSWFObject')||window.krpano||window.krpanoJS||window.krpanoInterface||(window.get&&window.get('global')&&window.get('global').krpano)}catch(e){return null}};var k=getK();if(!k){throw new Error('krpano not ready')}
+var px=${Number(x)||0}, py=${Number(y)||0};
+var rx=${Number(radiusPx)||20};
+function distPointToSeg(x,y,x1,y1,x2,y2){var A=x-x1,B=y-y1,C=x2-x1,D=y2-y1;var dot=A*C+B*D;var len=C*C+D*D;var t=len>0?Math.max(0,Math.min(1,dot/len)):0;var xx=x1+t*C;var yy=y1+t*D;var dx=x-xx,dy=y-yy;return Math.sqrt(dx*dx+dy*dy)}
+var deletedPairs=[];var deletedDots=[];var deletedShape=false;var deletedStrokes=[];var deletedCircles=[];
+var i=0,j=0,ni=0,ci=0;var n='';var dn='';var cn='';
+var ax,ay,bx,by,cx,cy,w;var sx,sy,sx1,sy1,sx2,sy2;var psx=0,psy=0;var havePrev=false;var best,bestd,minD;var ii=0;var d,dd,edge,dx,dy;var r;
+
+// 1) Xoá các đoạn nối painter_pair_*
+var pcount=Number(k.get('global.painter_idx'));if(isFinite(pcount)&&pcount>1){for(i=0;i<pcount-1;i++){n='painter_pair_'+i;if(k.get("hotspot['"+n+"']")){ax=k.get("hotspot['"+n+"'].point[0].ath");ay=k.get("hotspot['"+n+"'].point[0].atv");bx=k.get("hotspot['"+n+"'].point[1].ath");by=k.get("hotspot['"+n+"'].point[1].atv");if(ax!=null&&ay!=null&&bx!=null&&by!=null){k.call('spheretoscreen('+ax+','+ay+',__a1x,__a1y)');k.call('spheretoscreen('+bx+','+by+',__b1x,__b1y)');sx1=Number(k.get('__a1x'));sy1=Number(k.get('__a1y'));sx2=Number(k.get('__b1x'));sy2=Number(k.get('__b1y'));d=distPointToSeg(px,py,sx1,sy1,sx2,sy2);if(d<=rx){k.call("removehotspot('"+n+"')");deletedPairs.push(n);}}}}}
+
+// 2) Xoá các chấm rn_dot_*
+var dcount=Number(k.get('global.painter_idx'));if(isFinite(dcount)&&dcount>0){for(j=0;j<dcount;j++){dn='rn_dot_'+j;if(k.get("hotspot['"+dn+"']")){cx=Number(k.get("hotspot['"+dn+"'].ath"));cy=Number(k.get("hotspot['"+dn+"'].atv"));k.call('spheretoscreen('+cx+','+cy+',__dx,__dy)');sx=Number(k.get('__dx'));sy=Number(k.get('__dy'));dx=px-sx;dy=py-sy;dd=Math.sqrt(dx*dx+dy*dy);if(dd<=rx){k.call("removehotspot('"+dn+"')");deletedDots.push(dn);}}}}
+
+// 3) Xoá polygon painter_shape nếu gần
+if(k.get("hotspot['painter_shape']")){minD=1e15;ii=0;havePrev=false;psx=0;psy=0;for(;;){ax=k.get("hotspot['painter_shape'].point["+ii+"].ath");ay=k.get("hotspot['painter_shape'].point["+ii+"].atv");if(ax===undefined||ay===undefined||ax===null||ay===null){break}k.call('spheretoscreen('+ax+','+ay+',__sx,__sy)');sx=Number(k.get('__sx'));sy=Number(k.get('__sy'));if(havePrev){d=distPointToSeg(px,py,psx,psy,sx,sy);if(d<minD){minD=d}}psx=sx;psy=sy;havePrev=true;ii++}if(minD<=rx){k.call("removehotspot('painter_shape')");deletedShape=true}}
+
+// 4) Xoá circle theo danh sách
+var circles=${circlesJson};for(ci=0;ci<circles.length;ci++){cn=circles[ci];if(k.get("hotspot['"+cn+"']")){w=Number(k.get("hotspot['"+cn+"'].width"));cx=Number(k.get("hotspot['"+cn+"'].ath"));cy=Number(k.get("hotspot['"+cn+"'].atv"));k.call('spheretoscreen('+cx+','+cy+',__cx,__cy)');sx=Number(k.get('__cx'));sy=Number(k.get('__cy'));r=isFinite(w)?w/2:16;dx=px-sx;dy=py-sy;edge=Math.abs(Math.sqrt(dx*dx+dy*dy)-r);if(edge<=rx){k.call("removehotspot('"+cn+"')");deletedCircles.push(cn);}}}
+
+// 5) Tẩy một phần stroke theo danh sách (polyline)
+var names=${namesJson};
+var addedStrokeParts=[];
+for(ni=0;ni<names.length;ni++){
+  n=names[ni];
+  if(!k.get("hotspot['"+n+"']")) { continue }
+  // Thu thập tất cả điểm của stroke
+  var pts=[]; var spts=[]; i=0;
+  for(;;){
+    ax=k.get("hotspot['"+n+"'].point["+i+"].ath");
+    ay=k.get("hotspot['"+n+"'].point["+i+"].atv");
+    if(ax===undefined||ay===undefined||ax===null||ay===null){break}
+    pts.push({ath:Number(ax),atv:Number(ay)});
+    k.call('spheretoscreen('+ax+','+ay+',__hx,__hy)');
+    spts.push({x:Number(k.get('__hx')), y:Number(k.get('__hy'))});
+    i++;
+  }
+  if(pts.length<2){ continue }
+  // Tìm các đoạn gần bút cần cắt
+  var cuts=[]; // cắt giữa i và i+1
+  for(i=0;i<pts.length-1;i++){
+    sx1=spts[i].x; sy1=spts[i].y; sx2=spts[i+1].x; sy2=spts[i+1].y;
+    d=distPointToSeg(px,py,sx1,sy1,sx2,sy2);
+    cuts.push(d<=rx);
+  }
+  // Nếu không có đoạn nào bị cắt thì bỏ qua
+  var anyCut=false; for(i=0;i<cuts.length;i++){ if(cuts[i]){ anyCut=true; break; } }
+  if(!anyCut){ continue }
+  // Tạo các phần liên tục không bị cắt
+  var parts=[]; var cur=[]; cur.push(pts[0]);
+  for(i=0;i<cuts.length;i++){
+    if(cuts[i]){ // kết thúc phần hiện tại
+      if(cur.length>=2){ parts.push(cur) }
+      cur=[]; cur.push(pts[i+1]);
+    } else {
+      cur.push(pts[i+1]);
+    }
+  }
+  if(cur.length>=2){ parts.push(cur) }
+  // Sao chép style từ stroke gốc
+  var bw=k.get("hotspot['"+n+"'].borderwidth");
+  var bc=k.get("hotspot['"+n+"'].bordercolor");
+  var safeBw = (typeof bw==='number'||!isNaN(Number(bw)))?Number(bw):3;
+  var safeBc = (typeof bc==='string' || typeof bc==='number')?bc:0xFF3B30;
+  // Tạo các hotspot phần và thu thập payload trả về
+  for(i=0;i<parts.length;i++){
+    var p=parts[i];
+    var newname = n + '_p_' + Date.now() + '_' + i;
+    k.call("addhotspot('"+newname+"')");
+    k.call("set(hotspot['"+newname+"'].renderer, webgl)");
+    k.call("set(hotspot['"+newname+"'].polyline, true)");
+    k.call("set(hotspot['"+newname+"'].closepath, false)");
+    k.call("set(hotspot['"+newname+"'].fillalpha, 0)");
+    k.call("set(hotspot['"+newname+"'].borderwidth, "+safeBw+")");
+    k.call("set(hotspot['"+newname+"'].bordercolor, "+safeBc+")");
+    k.call("set(hotspot['"+newname+"'].zorder, 99998)");
+    for(j=0;j<p.length;j++){
+      k.call("set(hotspot['"+newname+"'].point["+j+"].ath, "+p[j].ath+")");
+      k.call("set(hotspot['"+newname+"'].point["+j+"].atv, "+p[j].atv+")");
+    }
+    k.call("set(hotspot['"+newname+"'].userdata.point_count, "+p.length+")");
+    addedStrokeParts.push({name:newname, points:p});
+  }
+  // Xoá stroke gốc
+  k.call("removehotspot('"+n+"')");
+  deletedStrokes.push(n);
+}
+
+// Thông báo về RN để đồng bộ state
+if(window&&window.ReactNativeWebView&&window.ReactNativeWebView.postMessage){window.ReactNativeWebView.postMessage(JSON.stringify({type:'erase_result', deletedPairs:deletedPairs, deletedDots:deletedDots, deletedShape:deletedShape, deletedStrokes:deletedStrokes, deletedCircles:deletedCircles, addedStrokeParts:addedStrokeParts}))}
+}catch(e){}; true;`;
+  try {
+    webRef.current.injectJavaScript(js);
+  } catch (_) {
+    /* noop */
+  }
+}

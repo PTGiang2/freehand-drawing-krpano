@@ -38,6 +38,8 @@ import {
   setFreehandSelected, // Làm nổi bật/bỏ nổi bật nét tự do
   finalizeFreehand, // Kết thúc và cố định nét vẽ
   renderFreehandStroke, // Vẽ lại nét đã lưu
+  setDefaultFreehandWidth,
+  setTemporaryFreehandWidth,
 } from './drawing/FreehandMode';
 import type {SpherePoint} from './drawing/FreehandMode';
 import {
@@ -54,6 +56,7 @@ import {
   hitTestCircles,
 } from './drawing/KrpanoBridge';
 import {sendKrpano} from './drawing/KrpanoBridge';
+import {eraseAtScreenPoint} from './drawing/KrpanoBridge';
 import {
   renderCircle,
   removeCircle,
@@ -97,6 +100,9 @@ export const Simple360Painter: React.FC = () => {
   // State cho bảng màu
   const [showColorPalette, setShowColorPalette] = useState<boolean>(false);
   const [selectedColor, setSelectedColor] = useState<string>('#FF6B35');
+  // Width picker state (pt)
+  const [showWidthPicker, setShowWidthPicker] = useState<boolean>(false);
+  const [selectedWidthPt, setSelectedWidthPt] = useState<number>(3);
 
   // Hàm chuyển đổi màu hex sang format krpano
   const hexToKrpanoColor = (hex: string): string => {
@@ -129,7 +135,12 @@ export const Simple360Painter: React.FC = () => {
   // Bộ đếm sinh tên stroke duy nhất
   const strokeCounterRef = React.useRef<number>(0);
   // Danh sách các nét đã lưu
-  type SavedStroke = {name: string; points: SpherePoint[]; color?: string};
+  type SavedStroke = {
+    name: string;
+    points: SpherePoint[];
+    color?: string;
+    width?: number; // pt
+  };
   const [savedStrokes, setSavedStrokes] = useState<SavedStroke[]>([]);
   // Danh sách circle đã lưu
   const [savedCircles, setSavedCircles] = useState<
@@ -148,6 +159,11 @@ export const Simple360Painter: React.FC = () => {
   const selectedCircleRef = React.useRef<string | null>(null);
   // Chế độ xóa theo ý muốn (chọn 1 nét để xóa)
   const [deleteOneMode, setDeleteOneMode] = useState<boolean>(false);
+  // Chế độ tẩy (xóa theo tọa độ 2D, từng hotspot nhỏ)
+  const [eraseMode, setEraseMode] = useState<boolean>(false);
+  // Bán kính tẩy (px)
+  const [eraseRadiusPx, setEraseRadiusPx] = useState<number>(28);
+  const [showErasePicker, setShowErasePicker] = useState<boolean>(false);
   // WebView đã sẵn sàng
   const [webReady, setWebReady] = useState<boolean>(false);
   // Modal import strokes
@@ -239,9 +255,10 @@ export const Simple360Painter: React.FC = () => {
   const importStrokes = async () => {
     try {
       let parsed: {
-        color: string;
+        color?: string;
         name: string;
         points: SpherePoint[];
+        width?: number;
       }[] = [];
       parsed = JSON.parse(importText);
       if (!Array.isArray(parsed)) {
@@ -263,6 +280,7 @@ export const Simple360Painter: React.FC = () => {
             s.name,
             s.points,
             s.color || hexToKrpanoColor(selectedColor),
+            s.width,
           ),
         );
       }
@@ -299,18 +317,30 @@ export const Simple360Painter: React.FC = () => {
     if (!freeHandMode) {
       return;
     }
-    // Đánh dấu đang bắt đầu vẽ tự do
+    // Đánh dấu bắt đầu vẽ ngay lập tức (tẩy chỉ diễn ra ở eraseMode riêng)
     isDrawingRef.current = true;
-    // Lấy tọa độ X từ sự kiện touch và làm tròn về số nguyên
     const x = Math.round(e.nativeEvent.locationX);
-    // Lấy tọa độ Y từ sự kiện touch và làm tròn về số nguyên
     const y = Math.round(e.nativeEvent.locationY);
-    // Gọi hàm bắt đầu vẽ tự do với tọa độ đã lấy được
-    startFreehand(webRef, x, y, hexToKrpanoColor(selectedColor));
+    startFreehand(
+      webRef,
+      x,
+      y,
+      hexToKrpanoColor(selectedColor),
+      selectedWidthPt,
+    );
   };
 
   // Hàm xử lý di chuyển trong khi vẽ tự do (kéo chuột)
   const handleFreeHandMove = (e: any) => {
+    // Nếu đang ở chế độ tẩy: xoá theo đường kéo
+    if (eraseMode) {
+      const x = Math.round(e.nativeEvent.locationX);
+      const y = Math.round(e.nativeEvent.locationY);
+      const names = savedStrokes.map(s => s.name);
+      const cnames = savedCircles.map(c => c.name);
+      eraseAtScreenPoint(webRef, x, y, eraseRadiusPx, names, cnames);
+      return;
+    }
     // Nếu không ở chế độ vẽ tự do hoặc chưa bắt đầu vẽ thì bỏ qua
     if (!freeHandMode || !isDrawingRef.current) {
       return;
@@ -1019,6 +1049,7 @@ export const Simple360Painter: React.FC = () => {
         lastPosition.name,
         lastPosition.points,
         lastPosition.color || hexToKrpanoColor(selectedColor),
+        lastPosition.width,
       );
 
       // Cập nhật stroke trong danh sách đã lưu
@@ -1069,6 +1100,7 @@ export const Simple360Painter: React.FC = () => {
           stroke.name,
           stroke.points,
           stroke.color || hexToKrpanoColor(selectedColor),
+          stroke.width,
         );
       });
 
@@ -1326,6 +1358,7 @@ export const Simple360Painter: React.FC = () => {
         s.name,
         s.points,
         s.color || hexToKrpanoColor(selectedColor),
+        s.width,
       );
     });
   }, [webReady, savedStrokes, selectedColor]);
@@ -1425,6 +1458,7 @@ export const Simple360Painter: React.FC = () => {
                     name: strokeName,
                     points,
                     color: hexToKrpanoColor(selectedColor),
+                    width: selectedWidthPt,
                   },
                 ];
                 AsyncStorage.setItem(
@@ -1509,6 +1543,8 @@ export const Simple360Painter: React.FC = () => {
               }
               return;
             }
+            // Tẩy nét khi đang ở chế độ freehand: nếu chạm trúng một stroke thì xóa ngay
+            
             // Xử lý chọn circle cho chế độ phóng to/thu nhỏ
             if (data && data.type === 'select_circle_for_scale') {
               const name: string | null = data.name || null;
@@ -1607,6 +1643,69 @@ export const Simple360Painter: React.FC = () => {
               // KHÔNG reset lịch sử vị trí khi stroke được cập nhật - để có thể redo
               return;
             }
+
+            // Đồng bộ kết quả tẩy để UI khớp với viewer
+            if (data && data.type === 'erase_result') {
+              const deletedStrokes: string[] = Array.isArray(data.deletedStrokes)
+                ? data.deletedStrokes
+                : [];
+              const deletedCircles: string[] = Array.isArray(data.deletedCircles)
+                ? data.deletedCircles
+                : [];
+              const addedStrokeParts: {name: string; points: SpherePoint[]}[] =
+                Array.isArray(data.addedStrokeParts) ? data.addedStrokeParts : [];
+
+              // Update strokes atomically using functional state to avoid stale closures
+              if (deletedStrokes.length > 0 || addedStrokeParts.length > 0) {
+                setSavedStrokes(prev => {
+                  // Remove deleted
+                  let next = prev.filter(s => !deletedStrokes.includes(s.name));
+                  // Merge added parts, dedup by name
+                  if (addedStrokeParts.length > 0) {
+                    const existing = new Set(next.map(s => s.name));
+                    const partsMeta = addedStrokeParts
+                      .filter(p => !existing.has(p.name))
+                      .map(p => ({
+                        name: p.name,
+                        points: p.points,
+                        color: hexToKrpanoColor(selectedColor),
+                        width: selectedWidthPt,
+                      }));
+                    next = [...next, ...partsMeta];
+                  }
+                  AsyncStorage.setItem('freehand_strokes', JSON.stringify(next)).catch(
+                    () => {},
+                  );
+                  return next;
+                });
+                if (
+                  selectedStrokeRef.current &&
+                  deletedStrokes.includes(selectedStrokeRef.current)
+                ) {
+                  selectedStrokeRef.current = null;
+                }
+              }
+
+              // Update circles atomically
+              if (deletedCircles.length > 0) {
+                setSavedCircles(prev => {
+                  const nextC = prev.filter(
+                    c => !deletedCircles.includes(c.name),
+                  );
+                  AsyncStorage.setItem('circles', JSON.stringify(nextC)).catch(
+                    () => {},
+                  );
+                  return nextC;
+                });
+                if (
+                  selectedCircleRef.current &&
+                  deletedCircles.includes(selectedCircleRef.current)
+                ) {
+                  selectedCircleRef.current = null;
+                }
+              }
+              return;
+            }
           } catch (_) {
             // noop
           }
@@ -1631,8 +1730,8 @@ export const Simple360Painter: React.FC = () => {
         />
       )}
 
-      {/* Overlay để bắt sự kiện vẽ tự do khi ở chế độ vẽ tự do và không di chuyển/phóng to */}
-      {freeHandMode && !moveMode && !scaleMode && (
+      {/* Overlay để bắt sự kiện vẽ tự do hoặc tẩy nét */}
+      {(freeHandMode || eraseMode) && !moveMode && !scaleMode && (
         <View
           // Style overlay phủ toàn màn hình
           style={styles.overlay}
@@ -1641,13 +1740,33 @@ export const Simple360Painter: React.FC = () => {
           // Luôn bắt đầu responder khi di chuyển
           onMoveShouldSetResponder={() => true}
           // Xử lý bắt đầu vẽ tự do
-          onResponderGrant={handleFreeHandStart}
+          onResponderGrant={e => {
+            if (eraseMode) {
+              const x = Math.round(e.nativeEvent.locationX);
+              const y = Math.round(e.nativeEvent.locationY);
+              const names = savedStrokes.map(s => s.name);
+              const cnames = savedCircles.map(c => c.name);
+              eraseAtScreenPoint(webRef, x, y, eraseRadiusPx, names, cnames);
+              return;
+            }
+            handleFreeHandStart(e);
+          }}
           // Xử lý di chuyển trong khi vẽ tự do
           onResponderMove={handleFreeHandMove}
           // Xử lý kết thúc vẽ tự do
-          onResponderRelease={handleFreeHandEnd}
+          onResponderRelease={() => {
+            if (eraseMode) {
+              return;
+            }
+            handleFreeHandEnd();
+          }}
           // Xử lý khi bị gián đoạn vẽ tự do
-          onResponderTerminate={handleFreeHandEnd}
+          onResponderTerminate={() => {
+            if (eraseMode) {
+              return;
+            }
+            handleFreeHandEnd();
+          }}
         />
       )}
 
@@ -1798,6 +1917,30 @@ export const Simple360Painter: React.FC = () => {
           </Text>
         </TouchableOpacity>
 
+        {/* Button toggle chế độ tẩy */}
+        <TouchableOpacity
+          style={[styles.toggleBtn, eraseMode && styles.toggleOnFreehand]}
+          onPress={() => {
+            const next = !eraseMode;
+            setEraseMode(next);
+            if (next) {
+              // Tắt các chế độ khác
+              setDrawMode(false);
+              setFreeHandMode(false);
+              setMoveMode(false);
+              setScaleMode(false);
+              setShapeMode(false);
+            }
+          }}>
+          <Text style={styles.toggleText}>{eraseMode ? '🧽 Đang tẩy' : '🧽 Tẩy'}</Text>
+        </TouchableOpacity>
+        {/* Nút chọn bán kính tẩy */}
+        <TouchableOpacity
+          style={[styles.toggleBtn, eraseMode && styles.toggleOnFreehand]}
+          onPress={() => setShowErasePicker(true)}>
+          <Text style={styles.toggleText}>{`🟢 ${eraseRadiusPx}px`}</Text>
+        </TouchableOpacity>
+
         {/* Button toggle chế độ vẽ hình (gộp) */}
         <TouchableOpacity
           style={[styles.toggleBtn, shapeMode && styles.toggleOnCircle]}
@@ -1937,6 +2080,12 @@ export const Simple360Painter: React.FC = () => {
           onPress={() => setShowColorPalette(true)}>
           <Text style={styles.colorPaletteText}>🎨</Text>
         </TouchableOpacity>
+        {/* Nút chọn độ dày nét (pt) */}
+        <TouchableOpacity
+          style={[styles.colorPaletteBtn, {backgroundColor: 'rgba(60,60,67,0.85)'}]}
+          onPress={() => setShowWidthPicker(true)}>
+          <Text style={styles.colorPaletteText}>🖊️</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Modal nhập strokes */}
@@ -1973,6 +2122,54 @@ export const Simple360Painter: React.FC = () => {
         </View>
       </Modal>
 
+      {/* Erase Radius Picker Modal */}
+      <Modal visible={showErasePicker} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Chọn bán kính tẩy (px)</Text>
+            <View style={{gap: 10}}>
+              {[3, 6, 12, 16, 20, 24, 28, 32, 40, 56].map(val => (
+                <TouchableOpacity
+                  key={String(val)}
+                  style={{
+                    backgroundColor:
+                      eraseRadiusPx === val
+                        ? 'rgba(10,132,255,0.25)'
+                        : 'rgba(60,60,67,0.5)',
+                    borderRadius: 8,
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                  }}
+                  onPress={() => {
+                    setEraseRadiusPx(val);
+                    setShowErasePicker(false);
+                  }}>
+                  <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                    <Text style={{color: '#fff', width: 64}}>{`${val} px`}</Text>
+                    <View
+                      style={{
+                        marginLeft: 8,
+                        width: val,
+                        height: 8,
+                        borderRadius: 4,
+                        backgroundColor: '#bbb',
+                      }}
+                    />
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.modalCancel]}
+                onPress={() => setShowErasePicker(false)}>
+                <Text style={styles.modalBtnText}>Đóng</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Color Palette Modal */}
       <ColorPalette
         visible={showColorPalette}
@@ -1980,6 +2177,49 @@ export const Simple360Painter: React.FC = () => {
         onColorSelect={setSelectedColor}
         selectedColor={selectedColor}
       />
+
+      {/* Width Picker Modal */}
+      <Modal visible={showWidthPicker} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Chọn độ dày nét (pt)</Text>
+            <View style={{gap: 10}}>
+              {[
+                0.25, 0.5, 0.75, 1, 1.5, 2.25, 3, 4.5, 6,
+              ].map(val => (
+                <TouchableOpacity
+                  key={String(val)}
+                  style={{
+                    backgroundColor:
+                      selectedWidthPt === val
+                        ? 'rgba(10,132,255,0.25)'
+                        : 'rgba(60,60,67,0.5)',
+                    borderRadius: 8,
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                  }}
+                  onPress={() => {
+                    setSelectedWidthPt(val);
+                    setDefaultFreehandWidth(webRef, val);
+                    setShowWidthPicker(false);
+                  }}>
+                  <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                    <Text style={{color: '#fff', width: 64}}>{`${val} pt`}</Text>
+                    <View style={{flex: 1, height: Math.max(1, val), backgroundColor: '#bbb', borderRadius: 2}} />
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalBtn, styles.modalCancel]}
+                onPress={() => setShowWidthPicker(false)}>
+                <Text style={styles.modalBtnText}>Đóng</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
